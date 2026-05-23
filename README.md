@@ -1,5 +1,9 @@
 # GPGPU.js
 
+[![npm version](https://img.shields.io/npm/v/@thatscalaguy/gpgpu.js.svg)](https://www.npmjs.com/package/@thatscalaguy/gpgpu.js)
+[![CI](https://github.com/ThatScalaGuy/GPGPU.js/actions/workflows/ci.yml/badge.svg)](https://github.com/ThatScalaGuy/GPGPU.js/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 General-Purpose GPU Computing in JavaScript using WebGPU. Write GPU-accelerated code with zero boilerplate — no shader knowledge required.
 
 ## Features
@@ -14,13 +18,13 @@ General-Purpose GPU Computing in JavaScript using WebGPU. Write GPU-accelerated 
 ## Install
 
 ```bash
-npm install gpgpu.js
+npm install @thatscalaguy/gpgpu.js
 ```
 
 ## Quick Start
 
 ```javascript
-import { gpu } from "gpgpu.js";
+import { gpu } from "@thatscalaguy/gpgpu.js";
 
 // Element-wise operations
 const sum = await gpu.add([1, 2, 3], [4, 5, 6]);       // [5, 7, 9]
@@ -144,10 +148,10 @@ const result = await kernel.run(inputData);
 ### Instance Management
 
 ```javascript
-import { GPU } from "gpgpu.js";
+import { GPU } from "@thatscalaguy/gpgpu.js";
 
 // Use the default singleton
-import { gpu } from "gpgpu.js";
+import { gpu } from "@thatscalaguy/gpgpu.js";
 
 // Or create your own instance
 const myGpu = new GPU();
@@ -173,6 +177,12 @@ WebGPU is supported in:
 
 When WebGPU is unavailable, all operations automatically fall back to CPU implementations.
 
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup
+and workflow, and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) for community
+guidelines. Security issues: see [SECURITY.md](./SECURITY.md).
+
 ## License
 
-MIT
+[MIT](./LICENSE) © Sven Herrmann

@@ -1,5 +1,5 @@
 {
-  "name": "gpgpu.js",
+  "name": "@thatscalaguy/gpgpu.js",
   "version": "0.1.0",
   "description": "User-friendly GPGPU computing in JavaScript using WebGPU",
   "type": "module",
@@ -17,12 +17,17 @@
     "dist"
   ],
   "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "gpu",
@@ -32,7 +37,20 @@
     "parallel",
     "wgsl"
   ],
+  "author": "Sven Herrmann <sven.herrmann@thatscalaguy.de>",
   "license": "MIT",
+  "homepage": "https://github.com/ThatScalaGuy/GPGPU.js#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ThatScalaGuy/GPGPU.js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ThatScalaGuy/GPGPU.js/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "devDependencies": {
     "@webgpu/types": "^0.1.0",
     "tsup": "^8.0.0",
