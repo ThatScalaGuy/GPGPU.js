@@ -91,42 +91,82 @@ fn main(
 `;
 }
 
-export function scanShader(
+// Per-block inclusive scan. Each workgroup scans its `workgroupSize` slice of `data`
+// in place and writes the slice's total to `blockSums[workgroup_id]`. Padding lanes are
+// initialised to `identity`, so lane `workgroupSize-1` always holds the true block total
+// even for a partial final block. Block totals are stitched together by scanAddOffsetsShader.
+export function blockScanShader(
   scanExpression: string,
   identity: string,
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
   return `
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+struct Params { n: u32 }
 
-var<workgroup> shared: array<f32, ${workgroupSize}>;
+@group(0) @binding(0) var<storage, read_write> data: array<f32>;
+@group(0) @binding(1) var<storage, read_write> blockSums: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+var<workgroup> sdata: array<f32, ${workgroupSize}>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(
   @builtin(global_invocation_id) gid: vec3u,
-  @builtin(local_invocation_id) lid: vec3u
+  @builtin(local_invocation_id) lid: vec3u,
+  @builtin(workgroup_id) wid: vec3u
 ) {
   let idx = gid.x;
-  shared[lid.x] = select(${identity}, input[idx], idx < arrayLength(&input));
+  sdata[lid.x] = select(${identity}, data[idx], idx < params.n);
   workgroupBarrier();
 
   // Hillis-Steele inclusive scan
   for (var offset = 1u; offset < ${workgroupSize}u; offset *= 2u) {
-    var val = shared[lid.x];
+    var val = sdata[lid.x];
     if (lid.x >= offset) {
-      let a = shared[lid.x - offset];
+      let a = sdata[lid.x - offset];
       let b = val;
       val = ${scanExpression};
     }
     workgroupBarrier();
-    shared[lid.x] = val;
+    sdata[lid.x] = val;
     workgroupBarrier();
   }
 
-  if (idx < arrayLength(&input)) {
-    output[idx] = shared[lid.x];
+  if (idx < params.n) {
+    data[idx] = sdata[lid.x];
   }
+  if (lid.x == ${workgroupSize}u - 1u) {
+    blockSums[wid.x] = sdata[lid.x];
+  }
+}
+`;
+}
+
+// Adds each block's offset (the inclusive scan of all earlier blocks' totals) to every
+// element of that block. `blockSums` must already be inclusively scanned; block 0 needs
+// no offset. The offset is the left operand so non-commutative associative ops stay correct.
+export function scanAddOffsetsShader(
+  scanExpression: string,
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+struct Params { n: u32 }
+
+@group(0) @binding(0) var<storage, read_write> data: array<f32>;
+@group(0) @binding(1) var<storage, read> blockSums: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(
+  @builtin(global_invocation_id) gid: vec3u,
+  @builtin(workgroup_id) wid: vec3u
+) {
+  let idx = gid.x;
+  if (idx >= params.n) { return; }
+  if (wid.x == 0u) { return; }
+  let a = blockSums[wid.x - 1u];
+  let b = data[idx];
+  data[idx] = ${scanExpression};
 }
 `;
 }
