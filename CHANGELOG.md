@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `reduce` (and `sum`/`min`/`max`/`product`) now chain buffers on-device with
+  ping-pong storage buffers, eliminating the per-pass CPU round-trip. The
+  multi-pass reduction uploads once, dispatches all passes in a single command
+  encoder, and reads back only the final value.
+
 ## [0.1.0]
 
 ### Added
