@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPGPU.js — Playground</title>
+
+    <!--
+      Dependencies are loaded from esm.sh via this import map — no bundler, no build step.
+
+      To test your LOCAL build instead of the published package, swap the
+      "@thatscalaguy/gpgpu.js" entry below for the local dist build:
+
+          "@thatscalaguy/gpgpu.js": "../dist/index.js"
+
+      (run `npm run build` first so dist/ exists).
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "lit": "https://esm.sh/lit@3",
+          "lit/": "https://esm.sh/lit@3/",
+          "@thatscalaguy/gpgpu.js": "https://esm.sh/@thatscalaguy/gpgpu.js@0.1.2"
+        }
+      }
+    </script>
+
+    <link rel="stylesheet" href="./styles/tokens.css" />
+    <script type="module" src="./components/app.js"></script>
+  </head>
+  <body>
+    <gpgpu-app></gpgpu-app>
+  </body>
+</html>

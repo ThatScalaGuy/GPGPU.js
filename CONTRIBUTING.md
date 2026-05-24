@@ -22,17 +22,19 @@ npm run test:watch # Run tests in watch mode
 npm run typecheck  # Type-check without emitting
 ```
 
-## Running Examples
+## Running the Playground
 
-The examples in `examples/` import directly from `src/`. Run them with a
-TypeScript runner, e.g.:
+The interactive browser playground lives in `playground/`. It's a zero-build
+showcase of every feature, loading dependencies via import maps + esm.sh. ES
+modules and import maps can't run from `file://`, so serve it over HTTP:
 
 ```bash
-npx tsx examples/basic-add.ts
+npx serve playground
 ```
 
-WebGPU is used when available; otherwise the library falls back to CPU
-implementations, so examples run in plain Node as well.
+Then open the printed URL in a WebGPU-capable browser (Chrome/Edge 113+,
+Safari 18+, recent Firefox). The library falls back to CPU when WebGPU is
+unavailable. See `playground/README.md` for details.
 
 ## Workflow
 
