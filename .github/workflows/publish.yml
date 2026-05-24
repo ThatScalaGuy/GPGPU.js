@@ -25,6 +25,11 @@ jobs:
       - name: Upgrade npm
         run: npm install -g npm@latest
 
+      # The git tag is the source of truth for the version. Strip the leading
+      # "v" (v0.1.1 -> 0.1.1) and write it into package.json without committing.
+      - name: Set version from tag
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+
       - name: Install dependencies
         run: npm ci
 
