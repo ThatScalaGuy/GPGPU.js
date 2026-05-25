@@ -1,9 +1,10 @@
-import type { NumericArray } from "../core/types";
-import { DEFAULT_WORKGROUP_SIZE, toFloat32Array } from "../core/types";
+import type { DataType, NumericArray } from "../core/types";
+import { inferDataType } from "../core/types";
+import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
-import { dispatchAndRead, uploadBuffer } from "../core/command";
+import { uploadBuffer, viewFor } from "../core/command";
 import { computeWorkgroupCount } from "../utils/workgroup";
 import { bitonicSortShader } from "../codegen/templates";
 
@@ -13,28 +14,37 @@ function nextPowerOf2(n: number): number {
   return p;
 }
 
+// Sentinel for padding lanes in an ascending sort: the largest value of the type so
+// padding always sorts to the end and is trimmed off on readback.
+const SORT_PAD: Record<DataType, number> = {
+  f32: Infinity,
+  i32: 2147483647,
+  u32: 4294967295,
+};
+
 export async function gpuSort(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: NumericArray
-): Promise<Float32Array> {
+): Promise<Float32Array | Int32Array | Uint32Array> {
   const device = await deviceManager.getDevice();
-  const arr = toFloat32Array(input);
+  const dtype = inferDataType(input);
+  const arr = toTypedArray(input, dtype);
   const originalSize = arr.length;
 
-  // Pad to next power of 2 with Infinity
+  // Pad to next power of 2 with the type's max value
   const paddedSize = nextPowerOf2(originalSize);
-  const padded = new Float32Array(paddedSize);
+  const padded = viewFor(dtype, new ArrayBuffer(paddedSize * 4));
   padded.set(arr);
   for (let i = originalSize; i < paddedSize; i++) {
-    padded[i] = Infinity;
+    padded[i] = SORT_PAD[dtype];
   }
 
   const byteSize = paddedSize * 4;
 
-  const shader = bitonicSortShader();
-  const pipeline = await shaderCache.getOrCreate(device, shader, "bitonic-sort");
+  const shader = bitonicSortShader(dtype);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `bitonic-sort-${dtype}`);
 
   // Data buffer needs read_write storage + copy
   const bufData = bufferPool.acquire(
@@ -42,7 +52,7 @@ export async function gpuSort(
     byteSize,
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
   );
-  device.queue.writeBuffer(bufData, 0, padded);
+  device.queue.writeBuffer(bufData, 0, padded.buffer as ArrayBuffer, padded.byteOffset, padded.byteLength);
 
   const numPairs = paddedSize / 2;
   const workgroupCount = computeWorkgroupCount(numPairs);
@@ -85,7 +95,7 @@ export async function gpuSort(
   device.queue.submit([copyEncoder.finish()]);
 
   await staging.mapAsync(GPUMapMode.READ);
-  const result = new Float32Array(staging.getMappedRange().slice(0));
+  const result = viewFor(dtype, staging.getMappedRange().slice(0));
   staging.unmap();
 
   bufferPool.release(staging);

@@ -159,5 +159,43 @@ describe("CPU Fallback Operations", () => {
       const result = cpuSort([]);
       expect(Array.from(result)).toEqual([]);
     });
+
+    it("sorts integers numerically, not lexicographically", () => {
+      const result = cpuSort(new Int32Array([10, 2, 33, 4]));
+      expect(result).toBeInstanceOf(Int32Array);
+      expect(Array.from(result)).toEqual([2, 4, 10, 33]);
+    });
+  });
+
+  describe("typed-array dtype parity", () => {
+    it("returns Int32Array for Int32Array input", () => {
+      const result = cpuAdd(new Int32Array([1, 2, 3]), new Int32Array([4, 5, 6]));
+      expect(result).toBeInstanceOf(Int32Array);
+      expect(Array.from(result)).toEqual([5, 7, 9]);
+    });
+
+    it("returns Uint32Array for Uint32Array input", () => {
+      const result = cpuMultiply(new Uint32Array([1, 2, 3]), 3);
+      expect(result).toBeInstanceOf(Uint32Array);
+      expect(Array.from(result)).toEqual([3, 6, 9]);
+    });
+
+    it("evaluates bitwise map on integers", () => {
+      const result = cpuMap(new Int32Array([1, 2, 3, 4]), "x & 1");
+      expect(result).toBeInstanceOf(Int32Array);
+      expect(Array.from(result)).toEqual([1, 0, 1, 0]);
+    });
+
+    it("evaluates shift map on u32", () => {
+      const result = cpuMap(new Uint32Array([1, 2, 3]), "x << 1");
+      expect(result).toBeInstanceOf(Uint32Array);
+      expect(Array.from(result)).toEqual([2, 4, 6]);
+    });
+
+    it("scan preserves integer dtype", () => {
+      const result = cpuScan(new Int32Array([1, 2, 3, 4]), (a, b) => a + b, 0);
+      expect(result).toBeInstanceOf(Int32Array);
+      expect(Array.from(result)).toEqual([1, 3, 6, 10]);
+    });
   });
 });

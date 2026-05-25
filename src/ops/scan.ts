@@ -1,10 +1,12 @@
 import type { NumericArray } from "../core/types";
-import { DEFAULT_WORKGROUP_SIZE, toFloat32Array } from "../core/types";
+import { DEFAULT_WORKGROUP_SIZE, inferDataType } from "../core/types";
+import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
+import { viewFor } from "../core/command";
 import { parseExpression } from "../codegen/expression-parser";
-import { emitWGSL } from "../codegen/wgsl-emitter";
+import { emitWGSL, formatLiteral } from "../codegen/wgsl-emitter";
 import { blockScanShader, scanAddOffsetsShader } from "../codegen/templates";
 
 const WG = DEFAULT_WORKGROUP_SIZE;
@@ -16,22 +18,23 @@ export async function gpuScan(
   input: NumericArray,
   fn: ((a: number, b: number) => number) | string = (a, b) => a + b,
   identity: number = 0
-): Promise<Float32Array> {
-  const arr = toFloat32Array(input);
+): Promise<Float32Array | Int32Array | Uint32Array> {
+  const dtype = inferDataType(input);
+  const arr = toTypedArray(input, dtype);
   const size = arr.length;
-  if (size === 0) return new Float32Array(0);
+  if (size === 0) return toTypedArray([], dtype);
 
   const device = await deviceManager.getDevice();
 
   const ir = parseExpression(fn, ["a", "b"]);
-  const scanExpr = emitWGSL(ir);
-  const identityStr = Number.isInteger(identity) ? identity.toFixed(1) : String(identity);
+  const scanExpr = emitWGSL(ir, dtype);
+  const identityStr = formatLiteral(identity, dtype);
 
   const blockScanPipe = await shaderCache.getOrCreate(
-    device, blockScanShader(scanExpr, identityStr), "scan-block"
+    device, blockScanShader(scanExpr, identityStr, dtype), `scan-block-${dtype}`
   );
   const addOffsetsPipe = await shaderCache.getOrCreate(
-    device, scanAddOffsetsShader(scanExpr), "scan-add"
+    device, scanAddOffsetsShader(scanExpr, dtype), `scan-add-${dtype}`
   );
 
   // Single command encoder for every level so the multi-block scan never round-trips
@@ -103,7 +106,7 @@ export async function gpuScan(
   device.queue.submit([encoder.finish()]);
 
   await staging.mapAsync(GPUMapMode.READ);
-  const result = new Float32Array(staging.getMappedRange().slice(0));
+  const result = viewFor(dtype, staging.getMappedRange().slice(0));
   staging.unmap();
 
   bufferPool.release(staging);

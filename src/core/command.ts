@@ -1,4 +1,15 @@
+import type { DataType } from "./types";
 import { BufferPool } from "./buffer-pool";
+
+/** Wrap a copied ArrayBuffer in the typed-array view that matches `dtype`. */
+export function viewFor(
+  dtype: DataType,
+  buffer: ArrayBuffer
+): Float32Array | Int32Array | Uint32Array {
+  if (dtype === "i32") return new Int32Array(buffer);
+  if (dtype === "u32") return new Uint32Array(buffer);
+  return new Float32Array(buffer);
+}
 
 export async function dispatchAndRead(
   device: GPUDevice,
@@ -7,8 +18,9 @@ export async function dispatchAndRead(
   workgroupCount: [number, number?, number?],
   outputBuffer: GPUBuffer,
   outputSize: number,
-  bufferPool: BufferPool
-): Promise<Float32Array> {
+  bufferPool: BufferPool,
+  dtype: DataType = "f32"
+): Promise<Float32Array | Int32Array | Uint32Array> {
   const staging = bufferPool.acquire(
     device,
     outputSize,
@@ -26,7 +38,7 @@ export async function dispatchAndRead(
   device.queue.submit([encoder.finish()]);
 
   await staging.mapAsync(GPUMapMode.READ);
-  const result = new Float32Array(staging.getMappedRange().slice(0));
+  const result = viewFor(dtype, staging.getMappedRange().slice(0));
   staging.unmap();
   bufferPool.release(staging);
 

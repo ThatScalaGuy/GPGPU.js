@@ -1,4 +1,4 @@
-import type { NumericArray, MatMulOpts, KernelConfig } from "./core/types";
+import type { NumericArray, TypedArray, MatMulOpts, KernelConfig } from "./core/types";
 import { DeviceManager } from "./core/device";
 import { BufferPool } from "./core/buffer-pool";
 import { ShaderCache } from "./core/shader-cache";
@@ -29,7 +29,7 @@ export class GPU {
 
   // --- Elementwise operations ---
 
-  async add(a: NumericArray, b: NumericArray | number): Promise<Float32Array> {
+  async add(a: NumericArray, b: NumericArray | number): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () =>
@@ -40,7 +40,7 @@ export class GPU {
     );
   }
 
-  async subtract(a: NumericArray, b: NumericArray | number): Promise<Float32Array> {
+  async subtract(a: NumericArray, b: NumericArray | number): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () =>
@@ -51,7 +51,7 @@ export class GPU {
     );
   }
 
-  async multiply(a: NumericArray, b: NumericArray | number): Promise<Float32Array> {
+  async multiply(a: NumericArray, b: NumericArray | number): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () =>
@@ -62,7 +62,7 @@ export class GPU {
     );
   }
 
-  async divide(a: NumericArray, b: NumericArray | number): Promise<Float32Array> {
+  async divide(a: NumericArray, b: NumericArray | number): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () =>
@@ -78,7 +78,7 @@ export class GPU {
   async map(
     input: NumericArray,
     fn: ((x: number) => number) | string
-  ): Promise<Float32Array> {
+  ): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () => gpuMap(this.deviceManager, this.bufferPool, this.shaderCache, input, fn),
@@ -138,7 +138,7 @@ export class GPU {
     a: NumericArray,
     b: NumericArray,
     opts: MatMulOpts
-  ): Promise<Float32Array> {
+  ): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () => gpuMatmul(this.deviceManager, this.bufferPool, this.shaderCache, a, b, opts),
@@ -152,7 +152,7 @@ export class GPU {
     input: NumericArray,
     fn?: ((a: number, b: number) => number) | string,
     identity?: number
-  ): Promise<Float32Array> {
+  ): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () =>
@@ -166,7 +166,7 @@ export class GPU {
 
   // --- Sort ---
 
-  async sort(input: NumericArray): Promise<Float32Array> {
+  async sort(input: NumericArray): Promise<TypedArray> {
     return withFallback(
       this.deviceManager,
       () => gpuSort(this.deviceManager, this.bufferPool, this.shaderCache, input),
@@ -183,7 +183,7 @@ export class GPU {
   // --- Custom kernel ---
 
   async createKernel(config: KernelConfig): Promise<{
-    run: (...inputs: NumericArray[]) => Promise<Float32Array>;
+    run: (...inputs: NumericArray[]) => Promise<TypedArray>;
   }> {
     const device = await this.deviceManager.getDevice();
     const pipeline = await this.shaderCache.getOrCreate(device, config.shader, "custom-kernel");
@@ -191,12 +191,12 @@ export class GPU {
 
     return {
       run: async (...inputs: NumericArray[]) => {
-        const { toFloat32Array } = await import("./core/types");
+        const { toTypedArray } = await import("./utils/data-conversion");
         const { uploadBuffer, createOutputBuffer, dispatchAndRead } = await import("./core/command");
         const { computeWorkgroupCount } = await import("./utils/workgroup");
 
         const inputBuffers = inputs.map((input, i) => {
-          const arr = toFloat32Array(input);
+          const arr = toTypedArray(input, config.inputs[i].type);
           return uploadBuffer(device, arr, GPUBufferUsage.STORAGE, this.bufferPool);
         });
 
@@ -220,7 +220,7 @@ export class GPU {
         const workgroupCount = computeWorkgroupCount(config.output.size, workgroupSize);
         const result = await dispatchAndRead(
           device, pipeline, bindGroup,
-          [workgroupCount], outputBuffer, outputSize, this.bufferPool
+          [workgroupCount], outputBuffer, outputSize, this.bufferPool, config.output.type
         );
 
         for (const buf of inputBuffers) this.bufferPool.release(buf);

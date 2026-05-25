@@ -1,5 +1,6 @@
 import type { NumericArray } from "../core/types";
-import { DEFAULT_WORKGROUP_SIZE, toFloat32Array } from "../core/types";
+import { inferDataType } from "../core/types";
+import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
@@ -20,15 +21,16 @@ export async function gpuElementwiseBinary(
   a: NumericArray,
   b: NumericArray,
   op: string
-): Promise<Float32Array> {
+): Promise<Float32Array | Int32Array | Uint32Array> {
   const device = await deviceManager.getDevice();
-  const arrA = toFloat32Array(a);
-  const arrB = toFloat32Array(b);
+  const dtype = inferDataType(a);
+  const arrA = toTypedArray(a, dtype);
+  const arrB = toTypedArray(b, dtype);
   const size = arrA.length;
   const byteSize = size * 4;
 
-  const shader = elementwiseBinaryShader(op);
-  const pipeline = await shaderCache.getOrCreate(device, shader, `elementwise-${op}`);
+  const shader = elementwiseBinaryShader(op, dtype);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `elementwise-${op}-${dtype}`);
 
   const bufA = uploadBuffer(device, arrA, GPUBufferUsage.STORAGE, bufferPool);
   const bufB = uploadBuffer(device, arrB, GPUBufferUsage.STORAGE, bufferPool);
@@ -46,7 +48,7 @@ export async function gpuElementwiseBinary(
   const workgroupCount = computeWorkgroupCount(size);
   const result = await dispatchAndRead(
     device, pipeline, bindGroup,
-    [workgroupCount], bufOut, byteSize, bufferPool
+    [workgroupCount], bufOut, byteSize, bufferPool, dtype
   );
 
   bufferPool.release(bufA);
@@ -63,20 +65,21 @@ export async function gpuScalarBroadcast(
   input: NumericArray,
   scalar: number,
   op: string
-): Promise<Float32Array> {
+): Promise<Float32Array | Int32Array | Uint32Array> {
   const device = await deviceManager.getDevice();
-  const arr = toFloat32Array(input);
+  const dtype = inferDataType(input);
+  const arr = toTypedArray(input, dtype);
   const size = arr.length;
   const byteSize = size * 4;
 
-  const shader = scalarBroadcastShader(op);
-  const pipeline = await shaderCache.getOrCreate(device, shader, `scalar-${op}`);
+  const shader = scalarBroadcastShader(op, dtype);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `scalar-${op}-${dtype}`);
 
   const bufInput = uploadBuffer(device, arr, GPUBufferUsage.STORAGE, bufferPool);
   const bufOut = createOutputBuffer(device, byteSize, bufferPool);
 
-  // Uniform buffer for scalar param (16 bytes min for alignment)
-  const uniformData = new Float32Array([scalar]);
+  // Uniform buffer for the scalar param, in the same dtype as the data.
+  const uniformData = toTypedArray([scalar], dtype);
   const bufUniform = uploadBuffer(device, uniformData, GPUBufferUsage.UNIFORM, bufferPool);
 
   const bindGroup = device.createBindGroup({
@@ -91,7 +94,7 @@ export async function gpuScalarBroadcast(
   const workgroupCount = computeWorkgroupCount(size);
   const result = await dispatchAndRead(
     device, pipeline, bindGroup,
-    [workgroupCount], bufOut, byteSize, bufferPool
+    [workgroupCount], bufOut, byteSize, bufferPool, dtype
   );
 
   bufferPool.release(bufInput);
@@ -107,16 +110,17 @@ export async function gpuMap(
   shaderCache: ShaderCache,
   input: NumericArray,
   fn: ((x: number) => number) | string
-): Promise<Float32Array> {
+): Promise<Float32Array | Int32Array | Uint32Array> {
   const device = await deviceManager.getDevice();
-  const arr = toFloat32Array(input);
+  const dtype = inferDataType(input);
+  const arr = toTypedArray(input, dtype);
   const size = arr.length;
   const byteSize = size * 4;
 
   const ir = parseExpression(fn, ["x"]);
-  const expression = emitWGSL(ir);
-  const shader = mapShader(expression);
-  const pipeline = await shaderCache.getOrCreate(device, shader, "map");
+  const expression = emitWGSL(ir, dtype);
+  const shader = mapShader(expression, dtype);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `map-${dtype}`);
 
   const bufInput = uploadBuffer(device, arr, GPUBufferUsage.STORAGE, bufferPool);
   const bufOut = createOutputBuffer(device, byteSize, bufferPool);
@@ -132,7 +136,7 @@ export async function gpuMap(
   const workgroupCount = computeWorkgroupCount(size);
   const result = await dispatchAndRead(
     device, pipeline, bindGroup,
-    [workgroupCount], bufOut, byteSize, bufferPool
+    [workgroupCount], bufOut, byteSize, bufferPool, dtype
   );
 
   bufferPool.release(bufInput);

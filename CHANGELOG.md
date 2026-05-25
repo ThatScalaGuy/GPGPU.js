@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [next]
+
+### Added
+
+- **End-to-end `i32` / `u32` support.** The data type is inferred from the input
+  array's runtime type — pass an `Int32Array`/`Uint32Array` and the matching typed
+  array comes back; `Float32Array` and plain `number[]` continue to mean `f32`. No
+  new API parameters. Covers `map`, `add`/`subtract`/`multiply`/`divide` (array and
+  scalar), `reduce`/`sum`/`min`/`max`/`product`, `scan`, `sort`, `matmul`,
+  `pipeline()`, `GPUArray.toArray()`, and `createKernel` (which now honours the
+  `DataType` already declared on each `BufferSpec`).
+- **Bitwise operators in the expression language**: `&`, `|`, `^`, `~`, `<<`, `>>`,
+  legal only for integer dtypes (`i32`/`u32`). Enables hashing, bitmasks, and exact
+  integer counters that were previously impossible.
+- Exported a `TypedArray` type (`Float32Array | Int32Array | Uint32Array`).
+
+### Changed
+
+- Code generation is now type-aware: the WGSL emitter selects the element type,
+  formats literals per type (`1.0` for f32, `1` for i32, `1u` for u32), and rejects
+  illegal combinations (bitwise ops on f32, non-integer/negative literals for
+  integer types). Ops returning element arrays now return `Float32Array |
+  Int32Array | Uint32Array`; reductions still return `number`.
+- `min`/`max` and `sort` padding now use type-correct sentinels (e.g. `2147483647`
+  for `i32`, `4294967295` for `u32`) instead of f32-only values.
+
+### Fixed
+
+- `cpuSort` (the CPU fallback for `sort`) now sorts numerically rather than
+  lexicographically, matching the GPU bitonic sort for every dtype.
+
 ## [0.1.5]
 
 ### Fixed
