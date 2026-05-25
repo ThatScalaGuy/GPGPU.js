@@ -45,4 +45,11 @@ describe("reduce (real GPU)", () => {
     const input = Array.from({ length: n }, (_, i) => i + 1);
     expect(await gpuReduce(...args, input, (a, b) => a + b, 0)).toBe((n * (n + 1)) / 2);
   });
+
+  // Regression: a minified reducer has renamed params (`(a,b)=>a+b` -> `(n,t)=>n+t`).
+  // The shader template hardcodes `a`/`b`, so emitting the source names produced
+  // "unresolved identifier" and a pipeline-creation failure (seen under esm.sh).
+  it("reducer with non-canonical param names still compiles", async () => {
+    expect(await gpuReduce(...args, data, (n, t) => n + t, 0)).toBe(31);
+  });
 });

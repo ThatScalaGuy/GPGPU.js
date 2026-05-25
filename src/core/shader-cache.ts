@@ -14,6 +14,22 @@ export class ShaderCache {
       label: label ?? "gpgpu-shader",
     });
 
+    // Surface the real WGSL diagnostic. createComputePipelineAsync rejects with an
+    // opaque GPUPipelineError on some backends (notably Safari/WebKit), so pull the
+    // line:col messages out of getCompilationInfo before the pipeline call swallows them.
+    if (typeof module.getCompilationInfo === "function") {
+      const info = await module.getCompilationInfo();
+      const errors = info.messages.filter((m) => m.type === "error");
+      if (errors.length > 0) {
+        const detail = errors
+          .map((m) => `  ${m.lineNum}:${m.linePos}: ${m.message}`)
+          .join("\n");
+        throw new Error(
+          `Shader compilation failed (${label ?? "gpgpu-shader"}):\n${detail}`
+        );
+      }
+    }
+
     const pipeline = await device.createComputePipelineAsync({
       layout: "auto",
       compute: { module, entryPoint: "main" },

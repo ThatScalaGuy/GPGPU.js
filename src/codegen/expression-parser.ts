@@ -117,10 +117,12 @@ class Parser {
   private tokens: Token[];
   private pos = 0;
   private params: string[];
+  private emitNames: string[];
 
-  constructor(tokens: Token[], params: string[]) {
+  constructor(tokens: Token[], params: string[], emitNames?: string[]) {
     this.tokens = tokens;
     this.params = params;
+    this.emitNames = emitNames ?? params;
   }
 
   private peek(): Token {
@@ -266,10 +268,12 @@ class Parser {
         return { kind: "call", fn: fnTok.value, args };
       }
 
-      // Parameter reference
+      // Parameter reference. Emit the caller's canonical name (e.g. "a"/"b"), not the
+      // source param name, which a minifier can rename (esm.sh turns `(a,b)=>a+b` into
+      // `(n,t)=>n+t`) — the shader templates hardcode the canonical names.
       const paramIndex = this.params.indexOf(tok.value);
       if (paramIndex !== -1) {
-        return { kind: "param", name: tok.value, index: paramIndex };
+        return { kind: "param", name: this.emitNames[paramIndex] ?? tok.value, index: paramIndex };
       }
 
       throw new Error(
@@ -343,6 +347,7 @@ export function parseExpression(
 ): IRNode {
   let body: string;
   let params: string[];
+  let emitNames: string[] | undefined;
 
   if (typeof fn === "string") {
     body = fn;
@@ -352,10 +357,13 @@ export function parseExpression(
     const extracted = extractArrowParams(source);
     body = extracted.body;
     params = extracted.params;
+    // The source param names are unreliable (minifiers rename them); map them
+    // positionally to the caller's canonical names for emission.
+    emitNames = paramNames;
   }
 
   const tokens = tokenize(body);
-  const parser = new Parser(tokens, params);
+  const parser = new Parser(tokens, params, emitNames);
   return parser.parse();
 }
 

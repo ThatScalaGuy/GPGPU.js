@@ -165,6 +165,14 @@ describe("Expression Parser + WGSL Emitter", () => {
     it("parses arrow function with Math", () => {
       expect(parse((x: number) => Math.sqrt(x))).toBe("sqrt(x)");
     });
+
+    it("emits the caller's canonical param names, not the function's source names", () => {
+      // A minifier (e.g. esm.sh) renames params: `(a,b)=>a+b` becomes `(n,t)=>n+t`.
+      // The shader templates hardcode the canonical names, so emission must use those.
+      expect(parse((n: number, t: number) => n + t, ["a", "b"])).toBe("(a + b)");
+      expect(parse((s: number, e: number) => s * e, ["a", "b"])).toBe("(a * b)");
+      expect(parse((q: number) => q * 2, ["x"])).toBe("(x * 2.0)");
+    });
   });
 
   describe("complex expressions", () => {
