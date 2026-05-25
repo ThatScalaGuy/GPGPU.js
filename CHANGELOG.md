@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [next]
+## [Unreleased]
 
 ### Added
 
@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   formats literals per type (`1.0` for f32, `1` for i32, `1u` for u32), and rejects
   illegal combinations (bitwise ops on f32, non-integer/negative literals for
   integer types). Ops returning element arrays now return `Float32Array |
-  Int32Array | Uint32Array`; reductions still return `number`.
+Int32Array | Uint32Array`; reductions still return `number`.
 - `min`/`max` and `sort` padding now use type-correct sentinels (e.g. `2147483647`
   for `i32`, `4294967295` for `u32`) instead of f32-only values.
 
