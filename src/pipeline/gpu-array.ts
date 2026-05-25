@@ -1,5 +1,6 @@
-import type { DataType } from "../core/types";
+import type { DataType, TypedArray } from "../core/types";
 import { BufferPool } from "../core/buffer-pool";
+import { viewFor } from "../core/command";
 
 export class GPUArray {
   readonly buffer: GPUBuffer;
@@ -27,7 +28,7 @@ export class GPUArray {
     return this.length * 4;
   }
 
-  async toArray(): Promise<Float32Array> {
+  async toArray(): Promise<TypedArray> {
     if (this.destroyed) throw new Error("GPUArray has been destroyed");
 
     const staging = this.pool.acquire(
@@ -41,7 +42,7 @@ export class GPUArray {
     this.device.queue.submit([encoder.finish()]);
 
     await staging.mapAsync(GPUMapMode.READ);
-    const result = new Float32Array(staging.getMappedRange().slice(0));
+    const result = viewFor(this.dtype, staging.getMappedRange().slice(0));
     staging.unmap();
     this.pool.release(staging);
 

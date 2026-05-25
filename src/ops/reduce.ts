@@ -1,10 +1,12 @@
-import type { NumericArray } from "../core/types";
-import { REDUCE_WORKGROUP_SIZE, toFloat32Array } from "../core/types";
+import type { DataType, NumericArray } from "../core/types";
+import { REDUCE_WORKGROUP_SIZE, inferDataType } from "../core/types";
+import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
+import { viewFor } from "../core/command";
 import { parseExpression } from "../codegen/expression-parser";
-import { emitWGSL } from "../codegen/wgsl-emitter";
+import { emitWGSL, formatLiteral } from "../codegen/wgsl-emitter";
 import { reduceShader } from "../codegen/templates";
 
 export async function gpuReduce(
@@ -16,15 +18,16 @@ export async function gpuReduce(
   identity: number
 ): Promise<number> {
   const device = await deviceManager.getDevice();
+  const dtype = inferDataType(input);
 
   const ir = parseExpression(fn, ["a", "b"]);
-  const reduceExpr = emitWGSL(ir);
-  const identityStr = Number.isInteger(identity) ? identity.toFixed(1) : String(identity);
+  const reduceExpr = emitWGSL(ir, dtype);
+  const identityStr = formatLiteral(identity, dtype);
 
-  const shader = reduceShader(reduceExpr, identityStr);
-  const pipeline = await shaderCache.getOrCreate(device, shader, "reduce");
+  const shader = reduceShader(reduceExpr, identityStr, dtype);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `reduce-${dtype}`);
 
-  const inputData = toFloat32Array(input);
+  const inputData = toTypedArray(input, dtype);
 
   if (inputData.length === 0) return identity;
   if (inputData.length === 1) return inputData[0];
@@ -76,7 +79,7 @@ export async function gpuReduce(
   device.queue.submit([encoder.finish()]);
 
   await staging.mapAsync(GPUMapMode.READ);
-  const result = new Float32Array(staging.getMappedRange().slice(0))[0];
+  const result = viewFor(dtype, staging.getMappedRange().slice(0))[0];
   staging.unmap();
 
   bufferPool.release(staging);
@@ -95,18 +98,31 @@ export async function gpuSum(
   return gpuReduce(deviceManager, bufferPool, shaderCache, input, (a, b) => a + b, 0);
 }
 
+// Identity for `min` is the largest value of the type (so padding lanes never win).
+// f32 uses +3.4e38 (not the exact max 3.4028235e+38, which `toFixed` renders just above
+// the representable max → shader compile error); still larger than any real input.
+const MIN_IDENTITY: Record<DataType, number> = {
+  f32: 3.4e38,
+  i32: 2147483647,
+  u32: 4294967295,
+};
+
+// Identity for `max` is the smallest value of the type.
+const MAX_IDENTITY: Record<DataType, number> = {
+  f32: -3.4e38,
+  i32: -2147483648,
+  u32: 0,
+};
+
 export async function gpuMin(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: NumericArray
 ): Promise<number> {
-  // +3.4e38 (not the exact f32 max 3.4028235e+38, which `toFixed` renders just
-  // above the representable max → shader compile error). Still larger than any
-  // real input, so it's a safe min identity for padding lanes.
   return gpuReduce(
     deviceManager, bufferPool, shaderCache, input,
-    "Math.min(a, b)", 3.4e38
+    "Math.min(a, b)", MIN_IDENTITY[inferDataType(input)]
   );
 }
 
@@ -118,7 +134,7 @@ export async function gpuMax(
 ): Promise<number> {
   return gpuReduce(
     deviceManager, bufferPool, shaderCache, input,
-    "Math.max(a, b)", -3.4e38
+    "Math.max(a, b)", MAX_IDENTITY[inferDataType(input)]
   );
 }
 

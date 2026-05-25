@@ -1,5 +1,6 @@
 import type { NumericArray, MatMulOpts } from "../core/types";
-import { MATMUL_TILE_SIZE, toFloat32Array } from "../core/types";
+import { MATMUL_TILE_SIZE, inferDataType } from "../core/types";
+import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
@@ -13,17 +14,18 @@ export async function gpuMatmul(
   a: NumericArray,
   b: NumericArray,
   opts: MatMulOpts
-): Promise<Float32Array> {
+): Promise<Float32Array | Int32Array | Uint32Array> {
   const device = await deviceManager.getDevice();
   const { rowsA, colsA, colsB } = opts;
+  const dtype = inferDataType(a);
 
-  const arrA = toFloat32Array(a);
-  const arrB = toFloat32Array(b);
+  const arrA = toTypedArray(a, dtype);
+  const arrB = toTypedArray(b, dtype);
   const outputSize = rowsA * colsB;
   const outputByteSize = outputSize * 4;
 
-  const shader = matmulShader();
-  const pipeline = await shaderCache.getOrCreate(device, shader, "matmul");
+  const shader = matmulShader(dtype);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `matmul-${dtype}`);
 
   const bufA = uploadBuffer(device, arrA, GPUBufferUsage.STORAGE, bufferPool);
   const bufB = uploadBuffer(device, arrB, GPUBufferUsage.STORAGE, bufferPool);
@@ -48,7 +50,7 @@ export async function gpuMatmul(
 
   const result = await dispatchAndRead(
     device, pipeline, bindGroup,
-    [workgroupsX, workgroupsY], bufOut, outputByteSize, bufferPool
+    [workgroupsX, workgroupsY], bufOut, outputByteSize, bufferPool, dtype
   );
 
   bufferPool.release(bufA);

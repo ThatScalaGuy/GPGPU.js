@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
+import type { DataType } from "../../src/core/types";
 import { parseExpression } from "../../src/codegen/expression-parser";
 import { emitWGSL } from "../../src/codegen/wgsl-emitter";
 
-function parse(fn: ((...args: number[]) => number) | string, params?: string[]): string {
+function parse(
+  fn: ((...args: number[]) => number) | string,
+  params?: string[],
+  dtype: DataType = "f32"
+): string {
   const ir = parseExpression(fn, params);
-  return emitWGSL(ir);
+  return emitWGSL(ir, dtype);
 }
 
 describe("Expression Parser + WGSL Emitter", () => {
@@ -194,6 +199,70 @@ describe("Expression Parser + WGSL Emitter", () => {
 
     it("rejects unsupported Math functions", () => {
       expect(() => parse("Math.random()", ["x"])).toThrow("Unsupported Math function");
+    });
+  });
+
+  describe("typed literal formatting", () => {
+    it("emits i32 integer literals without a decimal", () => {
+      expect(parse("x + 1", ["x"], "i32")).toBe("(x + 1)");
+    });
+
+    it("emits u32 integer literals with a u suffix", () => {
+      expect(parse("x + 1", ["x"], "u32")).toBe("(x + 1u)");
+    });
+
+    it("still emits f32 literals with a decimal", () => {
+      expect(parse("x + 1", ["x"], "f32")).toBe("(x + 1.0)");
+    });
+
+    it("rejects non-integer literals for i32", () => {
+      expect(() => parse("x + 1.5", ["x"], "i32")).toThrow("Non-integer literal");
+    });
+
+    it("rejects non-integer literals for u32", () => {
+      expect(() => parse("x + 1.5", ["x"], "u32")).toThrow("Non-integer literal");
+    });
+
+    it("rejects negative literals for u32", () => {
+      // -5 parses as unary minus over literal 5; u32 disallows unary negation
+      expect(() => parse("x + -5", ["x"], "u32")).toThrow("Unary negation");
+    });
+  });
+
+  describe("bitwise operators", () => {
+    it("emits bitwise AND for integer dtypes", () => {
+      expect(parse("x & 1", ["x"], "i32")).toBe("(x & 1)");
+    });
+
+    it("emits bitwise OR / XOR", () => {
+      expect(parse("a | b", ["a", "b"], "u32")).toBe("(a | b)");
+      expect(parse("a ^ b", ["a", "b"], "u32")).toBe("(a ^ b)");
+    });
+
+    it("emits shifts", () => {
+      expect(parse("x << 2", ["x"], "i32")).toBe("(x << 2)");
+      expect(parse("x >> 1", ["x"], "u32")).toBe("(x >> 1u)");
+    });
+
+    it("emits bitwise NOT", () => {
+      expect(parse("~x", ["x"], "i32")).toBe("(~x)");
+    });
+
+    it("rejects bitwise operators on f32", () => {
+      expect(() => parse("x & 1", ["x"], "f32")).toThrow("requires an integer dtype");
+      expect(() => parse("~x", ["x"], "f32")).toThrow("requires an integer dtype");
+    });
+
+    it("respects bitwise precedence (& binds tighter than |)", () => {
+      expect(parse("x | 1 & 2", ["x"], "i32")).toBe("(x | (1 & 2))");
+    });
+
+    it("places shift below additive", () => {
+      expect(parse("x + 1 << 2", ["x"], "i32")).toBe("((x + 1) << 2)");
+    });
+
+    it("places relational below shift", () => {
+      expect(parse("x << 1 < 4", ["x"], "i32")).toBe("((x << 1) < 4)");
     });
   });
 });

@@ -1,9 +1,15 @@
+import type { DataType } from "../core/types";
 import { DEFAULT_WORKGROUP_SIZE, REDUCE_WORKGROUP_SIZE, MATMUL_TILE_SIZE } from "../core/types";
+import { formatLiteral } from "./wgsl-emitter";
 
-export function mapShader(expression: string, workgroupSize = DEFAULT_WORKGROUP_SIZE): string {
+export function mapShader(
+  expression: string,
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
   return `
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -17,12 +23,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 export function elementwiseBinaryShader(
   op: string,
+  elemType: DataType = "f32",
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
   return `
-@group(0) @binding(0) var<storage, read> a: array<f32>;
-@group(0) @binding(1) var<storage, read> b: array<f32>;
-@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> a: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> b: array<${elemType}>;
+@group(0) @binding(2) var<storage, read_write> output: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -35,13 +42,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 export function scalarBroadcastShader(
   op: string,
+  elemType: DataType = "f32",
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
   return `
-struct Params { scalar: f32 }
+struct Params { scalar: ${elemType} }
 
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
 @group(0) @binding(2) var<uniform> params: Params;
 
 @compute @workgroup_size(${workgroupSize})
@@ -56,13 +64,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 export function reduceShader(
   reduceExpression: string,
   identity: string,
+  elemType: DataType = "f32",
   workgroupSize = REDUCE_WORKGROUP_SIZE
 ): string {
   return `
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
 
-var<workgroup> sdata: array<f32, ${workgroupSize}>;
+var<workgroup> sdata: array<${elemType}, ${workgroupSize}>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(
@@ -98,16 +107,17 @@ fn main(
 export function blockScanShader(
   scanExpression: string,
   identity: string,
+  elemType: DataType = "f32",
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
   return `
 struct Params { n: u32 }
 
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<storage, read_write> blockSums: array<f32>;
+@group(0) @binding(0) var<storage, read_write> data: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> blockSums: array<${elemType}>;
 @group(0) @binding(2) var<uniform> params: Params;
 
-var<workgroup> sdata: array<f32, ${workgroupSize}>;
+var<workgroup> sdata: array<${elemType}, ${workgroupSize}>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(
@@ -147,13 +157,14 @@ fn main(
 // no offset. The offset is the left operand so non-commutative associative ops stay correct.
 export function scanAddOffsetsShader(
   scanExpression: string,
+  elemType: DataType = "f32",
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
   return `
 struct Params { n: u32 }
 
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<storage, read> blockSums: array<f32>;
+@group(0) @binding(0) var<storage, read_write> data: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> blockSums: array<${elemType}>;
 @group(0) @binding(2) var<uniform> params: Params;
 
 @compute @workgroup_size(${workgroupSize})
@@ -171,7 +182,8 @@ fn main(
 `;
 }
 
-export function matmulShader(tileSize = MATMUL_TILE_SIZE): string {
+export function matmulShader(elemType: DataType = "f32", tileSize = MATMUL_TILE_SIZE): string {
+  const zero = formatLiteral(0, elemType);
   return `
 struct Dims {
   M: u32,
@@ -179,13 +191,13 @@ struct Dims {
   N: u32,
 }
 
-@group(0) @binding(0) var<storage, read> a: array<f32>;
-@group(0) @binding(1) var<storage, read> b: array<f32>;
-@group(0) @binding(2) var<storage, read_write> result: array<f32>;
+@group(0) @binding(0) var<storage, read> a: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> b: array<${elemType}>;
+@group(0) @binding(2) var<storage, read_write> result: array<${elemType}>;
 @group(0) @binding(3) var<uniform> dims: Dims;
 
-var<workgroup> tileA: array<array<f32, ${tileSize}>, ${tileSize}>;
-var<workgroup> tileB: array<array<f32, ${tileSize}>, ${tileSize}>;
+var<workgroup> tileA: array<array<${elemType}, ${tileSize}>, ${tileSize}>;
+var<workgroup> tileB: array<array<${elemType}, ${tileSize}>, ${tileSize}>;
 
 @compute @workgroup_size(${tileSize}, ${tileSize})
 fn main(
@@ -197,7 +209,7 @@ fn main(
   let localRow = lid.y;
   let localCol = lid.x;
 
-  var sum = 0.0;
+  var sum = ${zero};
   let numTiles = (dims.K + ${tileSize}u - 1u) / ${tileSize}u;
 
   for (var t = 0u; t < numTiles; t++) {
@@ -207,13 +219,13 @@ fn main(
     if (row < dims.M && tiledCol < dims.K) {
       tileA[localRow][localCol] = a[row * dims.K + tiledCol];
     } else {
-      tileA[localRow][localCol] = 0.0;
+      tileA[localRow][localCol] = ${zero};
     }
 
     if (tiledRow < dims.K && col < dims.N) {
       tileB[localRow][localCol] = b[tiledRow * dims.N + col];
     } else {
-      tileB[localRow][localCol] = 0.0;
+      tileB[localRow][localCol] = ${zero};
     }
 
     workgroupBarrier();
@@ -232,7 +244,10 @@ fn main(
 `;
 }
 
-export function bitonicSortShader(workgroupSize = DEFAULT_WORKGROUP_SIZE): string {
+export function bitonicSortShader(
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
   return `
 struct Params {
   blockSize: u32,
@@ -240,7 +255,7 @@ struct Params {
   length: u32,
 }
 
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
+@group(0) @binding(0) var<storage, read_write> data: array<${elemType}>;
 @group(0) @binding(1) var<uniform> params: Params;
 
 @compute @workgroup_size(${workgroupSize})
@@ -271,14 +286,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 export function customKernelShader(
   shaderBody: string,
-  numInputs: number,
+  inputTypes: DataType[],
+  outputType: DataType = "f32",
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
   let bindings = "";
-  for (let i = 0; i < numInputs; i++) {
-    bindings += `@group(0) @binding(${i}) var<storage, read> input${i}: array<f32>;\n`;
+  for (let i = 0; i < inputTypes.length; i++) {
+    bindings += `@group(0) @binding(${i}) var<storage, read> input${i}: array<${inputTypes[i]}>;\n`;
   }
-  bindings += `@group(0) @binding(${numInputs}) var<storage, read_write> output: array<f32>;\n`;
+  bindings += `@group(0) @binding(${inputTypes.length}) var<storage, read_write> output: array<${outputType}>;\n`;
 
   return `
 ${bindings}

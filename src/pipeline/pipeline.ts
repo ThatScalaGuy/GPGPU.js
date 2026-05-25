@@ -1,12 +1,13 @@
-import type { NumericArray } from "../core/types";
-import { DEFAULT_WORKGROUP_SIZE, toFloat32Array } from "../core/types";
+import type { NumericArray, TypedArray } from "../core/types";
+import { inferDataType } from "../core/types";
+import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
-import { uploadBuffer, createOutputBuffer } from "../core/command";
+import { uploadBuffer, createOutputBuffer, viewFor } from "../core/command";
 import { computeWorkgroupCount } from "../utils/workgroup";
 import { parseExpression } from "../codegen/expression-parser";
-import { emitWGSL } from "../codegen/wgsl-emitter";
+import { emitWGSL, formatLiteral } from "../codegen/wgsl-emitter";
 import { mapShader, reduceShader } from "../codegen/templates";
 import { REDUCE_WORKGROUP_SIZE } from "../core/types";
 
@@ -52,9 +53,10 @@ export class Pipeline {
     return this;
   }
 
-  async run(input: NumericArray): Promise<Float32Array | number> {
+  async run(input: NumericArray): Promise<TypedArray | number> {
     const device = await this.deviceManager.getDevice();
-    const arr = toFloat32Array(input);
+    const dtype = inferDataType(input);
+    const arr = toTypedArray(input, dtype);
     let currentSize = arr.length;
 
     // Upload initial data
@@ -70,9 +72,9 @@ export class Pipeline {
       if (step.type === "map") {
         lastStepIsReduce = false;
         const ir = parseExpression(step.fn, ["x"]);
-        const expression = emitWGSL(ir);
-        const shader = mapShader(expression);
-        const pipeline = await this.shaderCache.getOrCreate(device, shader, "pipeline-map");
+        const expression = emitWGSL(ir, dtype);
+        const shader = mapShader(expression, dtype);
+        const pipeline = await this.shaderCache.getOrCreate(device, shader, `pipeline-map-${dtype}`);
 
         const outBuffer = createOutputBuffer(device, currentByteSize, this.bufferPool);
         buffersToRelease.push(outBuffer);
@@ -98,12 +100,10 @@ export class Pipeline {
       } else if (step.type === "reduce") {
         lastStepIsReduce = true;
         const ir = parseExpression(step.fn, ["a", "b"]);
-        const reduceExpr = emitWGSL(ir);
-        const identityStr = Number.isInteger(step.identity)
-          ? step.identity.toFixed(1)
-          : String(step.identity);
-        const shader = reduceShader(reduceExpr, identityStr);
-        const pipeline = await this.shaderCache.getOrCreate(device, shader, "pipeline-reduce");
+        const reduceExpr = emitWGSL(ir, dtype);
+        const identityStr = formatLiteral(step.identity, dtype);
+        const shader = reduceShader(reduceExpr, identityStr, dtype);
+        const pipeline = await this.shaderCache.getOrCreate(device, shader, `pipeline-reduce-${dtype}`);
 
         while (currentSize > 1) {
           const workgroupCount = Math.ceil(currentSize / REDUCE_WORKGROUP_SIZE);
@@ -148,7 +148,7 @@ export class Pipeline {
     device.queue.submit([copyEncoder.finish()]);
 
     await staging.mapAsync(GPUMapMode.READ);
-    const result = new Float32Array(staging.getMappedRange().slice(0));
+    const result = viewFor(dtype, staging.getMappedRange().slice(0));
     staging.unmap();
     this.bufferPool.release(staging);
 

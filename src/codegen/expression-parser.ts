@@ -7,8 +7,8 @@ const MATH_FUNCTIONS = new Set([
   "exp", "log", "sign", "clamp",
 ]);
 
-const OP_CHARS = new Set(["+", "-", "*", "/", "%", "<", ">", "=", "!", "&", "|"]);
-const MULTI_CHAR_OPS = new Set(["<=", ">=", "==", "!=", "===", "!==", "&&", "||"]);
+const OP_CHARS = new Set(["+", "-", "*", "/", "%", "<", ">", "=", "!", "&", "|", "^", "~"]);
+const MULTI_CHAR_OPS = new Set(["<=", ">=", "==", "!=", "===", "!==", "&&", "||", "<<", ">>"]);
 
 function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
@@ -174,19 +174,73 @@ class Parser {
   }
 
   private parseAnd(): IRNode {
-    let left = this.parseComparison();
+    let left = this.parseBitOr();
     while (this.peek().type === "op" && this.peek().value === "&&") {
       const op = this.advance().value;
-      const right = this.parseComparison();
+      const right = this.parseBitOr();
       left = { kind: "binary", op, left, right };
     }
     return left;
   }
 
-  private parseComparison(): IRNode {
+  private parseBitOr(): IRNode {
+    let left = this.parseBitXor();
+    while (this.peek().type === "op" && this.peek().value === "|") {
+      const op = this.advance().value;
+      const right = this.parseBitXor();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+
+  private parseBitXor(): IRNode {
+    let left = this.parseBitAnd();
+    while (this.peek().type === "op" && this.peek().value === "^") {
+      const op = this.advance().value;
+      const right = this.parseBitAnd();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+
+  private parseBitAnd(): IRNode {
+    let left = this.parseEquality();
+    while (this.peek().type === "op" && this.peek().value === "&") {
+      const op = this.advance().value;
+      const right = this.parseEquality();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+
+  private parseEquality(): IRNode {
+    let left = this.parseRelational();
+    const eqOps = new Set(["==", "!=", "===", "!=="]);
+    while (this.peek().type === "op" && eqOps.has(this.peek().value)) {
+      const op = this.advance().value;
+      const right = this.parseRelational();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+
+  private parseRelational(): IRNode {
+    let left = this.parseShift();
+    const relOps = new Set(["<", ">", "<=", ">="]);
+    while (this.peek().type === "op" && relOps.has(this.peek().value)) {
+      const op = this.advance().value;
+      const right = this.parseShift();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+
+  private parseShift(): IRNode {
     let left = this.parseAdditive();
-    const compOps = new Set(["<", ">", "<=", ">=", "==", "!=", "===", "!=="]);
-    while (this.peek().type === "op" && compOps.has(this.peek().value)) {
+    while (
+      this.peek().type === "op" &&
+      (this.peek().value === "<<" || this.peek().value === ">>")
+    ) {
       const op = this.advance().value;
       const right = this.parseAdditive();
       left = { kind: "binary", op, left, right };
@@ -223,7 +277,7 @@ class Parser {
   private parseUnary(): IRNode {
     if (
       this.peek().type === "op" &&
-      (this.peek().value === "-" || this.peek().value === "!")
+      (this.peek().value === "-" || this.peek().value === "!" || this.peek().value === "~")
     ) {
       const op = this.advance().value;
       const operand = this.parseUnary();

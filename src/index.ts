@@ -4,6 +4,7 @@ export { GPUArray } from "./pipeline/gpu-array";
 export type {
   DataType,
   NumericArray,
+  TypedArray,
   KernelConfig,
   MatMulOpts,
   BufferSpec,
