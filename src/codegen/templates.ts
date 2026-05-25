@@ -62,7 +62,7 @@ export function reduceShader(
 @group(0) @binding(0) var<storage, read> input: array<f32>;
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 
-var<workgroup> shared: array<f32, ${workgroupSize}>;
+var<workgroup> sdata: array<f32, ${workgroupSize}>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(
@@ -71,21 +71,21 @@ fn main(
   @builtin(workgroup_id) wid: vec3u
 ) {
   let idx = gid.x;
-  shared[lid.x] = select(${identity}, input[idx], idx < arrayLength(&input));
+  sdata[lid.x] = select(${identity}, input[idx], idx < arrayLength(&input));
 
   workgroupBarrier();
 
   for (var stride = ${workgroupSize}u / 2u; stride > 0u; stride /= 2u) {
     if (lid.x < stride) {
-      let a = shared[lid.x];
-      let b = shared[lid.x + stride];
-      shared[lid.x] = ${reduceExpression};
+      let a = sdata[lid.x];
+      let b = sdata[lid.x + stride];
+      sdata[lid.x] = ${reduceExpression};
     }
     workgroupBarrier();
   }
 
   if (lid.x == 0u) {
-    output[wid.x] = shared[0];
+    output[wid.x] = sdata[0];
   }
 }
 `;

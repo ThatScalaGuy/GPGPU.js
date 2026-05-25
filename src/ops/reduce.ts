@@ -101,9 +101,12 @@ export async function gpuMin(
   shaderCache: ShaderCache,
   input: NumericArray
 ): Promise<number> {
+  // +3.4e38 (not the exact f32 max 3.4028235e+38, which `toFixed` renders just
+  // above the representable max → shader compile error). Still larger than any
+  // real input, so it's a safe min identity for padding lanes.
   return gpuReduce(
     deviceManager, bufferPool, shaderCache, input,
-    "min(a, b)", 3.4028235e+38
+    "Math.min(a, b)", 3.4e38
   );
 }
 
@@ -115,7 +118,7 @@ export async function gpuMax(
 ): Promise<number> {
   return gpuReduce(
     deviceManager, bufferPool, shaderCache, input,
-    "max(a, b)", -3.4028235e+38
+    "Math.max(a, b)", -3.4e38
   );
 }
 
