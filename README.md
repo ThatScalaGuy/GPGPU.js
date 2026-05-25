@@ -6,6 +6,8 @@
 
 General-Purpose GPU Computing in JavaScript using WebGPU. Write GPU-accelerated code with zero boilerplate — no shader knowledge required.
 
+> **Try it now:** experiment with GPGPU.js right in your browser at the [hosted playground](https://thatscalaguy.github.io/GPGPU.js/).
+
 ## Features
 
 - **Minimal API** — `gpu.add(a, b)`, `gpu.map(arr, x => x * 2)`, `gpu.sum(arr)`
