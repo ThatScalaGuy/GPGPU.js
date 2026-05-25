@@ -259,7 +259,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let leftVal = data[leftIdx];
   let rightVal = data[rightIdx];
 
-  let shouldSwap = select(leftVal < rightVal, leftVal > rightVal, sameDirection);
+  let shouldSwap = select((leftVal < rightVal), (leftVal > rightVal), sameDirection);
 
   if (shouldSwap) {
     data[leftIdx] = rightVal;
