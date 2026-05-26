@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GPUArray` as a first-class input/output type.** Ops now accept
+  `NumericArray | GPUArray`, so a GPU-resident array can flow from one op to the
+  next without re-uploading. They can also *return* a `GPUArray` (no readback):
+  this happens automatically when any input is a `GPUArray`, and can be forced or
+  overridden per call with `{ keepOnGpu: true | false }`. New `gpu.upload(arr)`
+  uploads a CPU array and hands back a `GPUArray`; read it with `array.toArray()`
+  and free it with `array.destroy()`. Covers `add`/`subtract`/`multiply`/`divide`
+  (array and scalar), `map`, `matmul`, `scan`, `sort`, `pipeline().run()`, and
+  `createKernel().run()`. The reduce family (`reduce`/`sum`/`min`/`max`/`product`)
+  accepts a `GPUArray` input but still returns a scalar `number`.
+  - Chaining several ops on the same data now costs a single upload and a single
+    readback instead of one round-trip per op.
+  - In-place ops (`scan`, `sort`) copy a `GPUArray` input into their own working
+    buffer, so the caller's array is never mutated.
+  - A `keepOnGpu`/auto `GPUArray` result is owned by the caller — read it via
+    `toArray()` (which does not free it) or release it with `destroy()`.
 - **End-to-end `i32` / `u32` support.** The data type is inferred from the input
   array's runtime type — pass an `Int32Array`/`Uint32Array` and the matching typed
   array comes back; `Float32Array` and plain `number[]` continue to mean `f32`. No

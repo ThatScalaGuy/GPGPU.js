@@ -1,34 +1,55 @@
-import type { NumericArray, MatMulOpts } from "../core/types";
-import { MATMUL_TILE_SIZE, inferDataType } from "../core/types";
-import { toTypedArray } from "../utils/data-conversion";
+import type { MatMulOpts, TypedArray } from "../core/types";
+import { MATMUL_TILE_SIZE } from "../core/types";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
-import { dispatchAndRead, uploadBuffer, createOutputBuffer } from "../core/command";
+import { createOutputBuffer, dispatchOnly, uploadBuffer } from "../core/command";
+import { GPUArray } from "../pipeline/gpu-array";
+import {
+  type OpInput,
+  type OpOptions,
+  resolveInput,
+  inputDtype,
+  finalize,
+} from "../core/io";
 import { matmulShader } from "../codegen/templates";
 
+export function gpuMatmul(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  a: OpInput,
+  b: OpInput,
+  opts: MatMulOpts & { keepOnGpu: true }
+): Promise<GPUArray>;
+export function gpuMatmul(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  a: OpInput,
+  b: OpInput,
+  opts: MatMulOpts & OpOptions
+): Promise<TypedArray>;
 export async function gpuMatmul(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  a: NumericArray,
-  b: NumericArray,
-  opts: MatMulOpts
-): Promise<Float32Array | Int32Array | Uint32Array> {
+  a: OpInput,
+  b: OpInput,
+  opts: MatMulOpts & OpOptions
+): Promise<TypedArray | GPUArray> {
   const device = await deviceManager.getDevice();
   const { rowsA, colsA, colsB } = opts;
-  const dtype = inferDataType(a);
+  const dtype = inputDtype(a);
 
-  const arrA = toTypedArray(a, dtype);
-  const arrB = toTypedArray(b, dtype);
+  const ra = resolveInput(a, device, bufferPool, dtype);
+  const rb = resolveInput(b, device, bufferPool, dtype);
   const outputSize = rowsA * colsB;
   const outputByteSize = outputSize * 4;
 
   const shader = matmulShader(dtype);
   const pipeline = await shaderCache.getOrCreate(device, shader, `matmul-${dtype}`);
 
-  const bufA = uploadBuffer(device, arrA, GPUBufferUsage.STORAGE, bufferPool);
-  const bufB = uploadBuffer(device, arrB, GPUBufferUsage.STORAGE, bufferPool);
   const bufOut = createOutputBuffer(device, outputByteSize, bufferPool);
 
   // Uniform buffer for dimensions (3 x u32 = 12 bytes, padded to 16)
@@ -38,8 +59,8 @@ export async function gpuMatmul(
   const bindGroup = device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: bufA, size: arrA.byteLength } },
-      { binding: 1, resource: { buffer: bufB, size: arrB.byteLength } },
+      { binding: 0, resource: { buffer: ra.buffer, size: ra.length * 4 } },
+      { binding: 1, resource: { buffer: rb.buffer, size: rb.length * 4 } },
       { binding: 2, resource: { buffer: bufOut, size: outputByteSize } },
       { binding: 3, resource: { buffer: bufDims, size: dims.byteLength } },
     ],
@@ -48,15 +69,14 @@ export async function gpuMatmul(
   const workgroupsX = Math.ceil(colsB / MATMUL_TILE_SIZE);
   const workgroupsY = Math.ceil(rowsA / MATMUL_TILE_SIZE);
 
-  const result = await dispatchAndRead(
-    device, pipeline, bindGroup,
-    [workgroupsX, workgroupsY], bufOut, outputByteSize, bufferPool, dtype
-  );
+  dispatchOnly(device, pipeline, bindGroup, [workgroupsX, workgroupsY]);
 
-  bufferPool.release(bufA);
-  bufferPool.release(bufB);
-  bufferPool.release(bufOut);
+  ra.release();
+  rb.release();
   bufferPool.release(bufDims);
 
-  return result.slice(0, outputSize);
+  return finalize(
+    new GPUArray(bufOut, outputSize, dtype, device, bufferPool),
+    opts.keepOnGpu ?? false
+  );
 }

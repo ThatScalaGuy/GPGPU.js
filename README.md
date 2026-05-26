@@ -13,6 +13,7 @@ General-Purpose GPU Computing in JavaScript using WebGPU. Write GPU-accelerated 
 - **Minimal API** — `gpu.add(a, b)`, `gpu.map(arr, x => x * 2)`, `gpu.sum(arr)`
 - **Auto WGSL codegen** — Arrow functions compile to GPU shaders automatically
 - **Pipeline chaining** — Chain ops without CPU-GPU roundtrips
+- **GPU-resident arrays** — `gpu.upload()` + `keepOnGpu` keep data on the GPU across ops
 - **CPU fallback** — Runs everywhere, accelerates where WebGPU is available
 - **TypeScript** — Full type safety with zero runtime dependencies
 - **Tree-shakeable** — ESM + CJS, import only what you use
@@ -49,6 +50,13 @@ const result = await gpu.pipeline()
   .map(x => x + 1)
   .reduce((a, b) => a + b, 0)
   .run(data);
+
+// Keep data on the GPU across ops — one upload, one readback
+const g = await gpu.upload([1, 2, 3, 4]);   // GPUArray
+const scaled = await gpu.multiply(g, 2);     // GPUArray (input was on GPU)
+const shifted = await gpu.add(scaled, 1);    // GPUArray
+const out = await shifted.toArray();         // [3, 5, 7, 9]
+g.destroy(); scaled.destroy(); shifted.destroy();
 
 // Cleanup
 gpu.destroy();
@@ -123,6 +131,48 @@ const result = await gpu.pipeline()
   .reduce((a, b) => a + b, 0)
   .run(inputData);
 ```
+
+### GPU-Resident Arrays
+
+By default every op uploads its input, computes, and reads the result back to the
+CPU. When you chain several ops on the same data, you can keep it on the GPU and
+pay for just one upload and one readback.
+
+`gpu.upload()` returns a `GPUArray` — a handle to GPU-resident data:
+
+```javascript
+const g = await gpu.upload([1, 2, 3, 4]);   // GPUArray
+const result = await g.toArray();             // read back to a TypedArray
+g.destroy();                                  // free the GPU buffer
+```
+
+Ops accept a `GPUArray` anywhere they accept an array. **Auto mode**: if any input
+is a `GPUArray`, the result is returned as a `GPUArray` (no readback); otherwise
+you get a `TypedArray` as before:
+
+```javascript
+const g = await gpu.upload(data);
+const a = await gpu.multiply(g, 2);   // GPUArray (input was on GPU)
+const b = await gpu.map(a, x => x + 1);
+const out = await b.toArray();        // read back once, at the end
+g.destroy(); a.destroy(); b.destroy();
+```
+
+Override auto mode per call with `keepOnGpu`:
+
+```javascript
+await gpu.add([1, 2, 3], 1, { keepOnGpu: true });  // force a GPUArray from CPU input
+await gpu.add(g, 1, { keepOnGpu: false });          // force readback to a TypedArray
+```
+
+`keepOnGpu` works on `add`/`subtract`/`multiply`/`divide`, `map`, `matmul`,
+`scan`, `sort`, `pipeline().run()`, and `createKernel().run()`. Reductions
+(`sum`/`min`/`max`/`product`/`reduce`) accept a `GPUArray` input but always return
+a scalar `number`. In-place ops (`scan`, `sort`) never mutate a `GPUArray` input.
+
+> **Ownership:** a `GPUArray` you receive is yours to manage — read it with
+> `toArray()` (which keeps it alive) or release it with `destroy()`. Leaking
+> handles ties up pooled GPU buffers.
 
 ### Custom Kernel
 

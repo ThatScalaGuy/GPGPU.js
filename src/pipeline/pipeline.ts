@@ -1,10 +1,11 @@
-import type { NumericArray, TypedArray } from "../core/types";
-import { inferDataType } from "../core/types";
+import type { TypedArray } from "../core/types";
 import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
 import { uploadBuffer, createOutputBuffer, viewFor } from "../core/command";
+import { GPUArray } from "./gpu-array";
+import { type OpInput, type OpOptions, inputDtype, isGPUArray, finalize } from "../core/io";
 import { computeWorkgroupCount } from "../utils/workgroup";
 import { parseExpression } from "../codegen/expression-parser";
 import { emitWGSL, formatLiteral } from "../codegen/wgsl-emitter";
@@ -53,18 +54,30 @@ export class Pipeline {
     return this;
   }
 
-  async run(input: NumericArray): Promise<TypedArray | number> {
+  async run(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray | number> {
     const device = await this.deviceManager.getDevice();
-    const dtype = inferDataType(input);
-    const arr = toTypedArray(input, dtype);
-    let currentSize = arr.length;
+    const dtype = inputDtype(input);
+    const hasGpuInput = isGPUArray(input);
+    const keepOnGpu = opts?.keepOnGpu ?? hasGpuInput;
 
-    // Upload initial data
-    let currentBuffer = uploadBuffer(
-      device, arr, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, this.bufferPool
-    );
+    // A GPUArray input is reused in place as the initial buffer (the first step reads it
+    // and writes a fresh buffer, so it is never mutated) and is never released here.
+    const buffersToRelease: GPUBuffer[] = [];
+    let currentSize: number;
+    let currentBuffer: GPUBuffer;
+    if (isGPUArray(input)) {
+      if (input.isDestroyed) throw new Error("GPUArray has been destroyed");
+      currentSize = input.length;
+      currentBuffer = input.buffer;
+    } else {
+      const arr = toTypedArray(input, dtype);
+      currentSize = arr.length;
+      currentBuffer = uploadBuffer(
+        device, arr, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, this.bufferPool
+      );
+      buffersToRelease.push(currentBuffer);
+    }
     let currentByteSize = currentSize * 4;
-    const buffersToRelease: GPUBuffer[] = [currentBuffer];
 
     let lastStepIsReduce = false;
 
@@ -135,31 +148,31 @@ export class Pipeline {
       }
     }
 
-    // Read back final result
-    const finalByteSize = currentSize * 4;
-    const staging = this.bufferPool.acquire(
-      device,
-      finalByteSize,
-      GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-    );
-
-    const copyEncoder = device.createCommandEncoder();
-    copyEncoder.copyBufferToBuffer(currentBuffer, 0, staging, 0, finalByteSize);
-    device.queue.submit([copyEncoder.finish()]);
-
-    await staging.mapAsync(GPUMapMode.READ);
-    const result = viewFor(dtype, staging.getMappedRange().slice(0));
-    staging.unmap();
-    this.bufferPool.release(staging);
-
-    // Release all intermediate buffers
-    for (const buf of buffersToRelease) {
-      this.bufferPool.release(buf);
-    }
-
+    // A reduce-terminated pipeline always yields a scalar; read it back directly.
     if (lastStepIsReduce) {
-      return result[0];
+      const staging = this.bufferPool.acquire(
+        device, 4, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+      );
+      const copyEncoder = device.createCommandEncoder();
+      copyEncoder.copyBufferToBuffer(currentBuffer, 0, staging, 0, 4);
+      device.queue.submit([copyEncoder.finish()]);
+
+      await staging.mapAsync(GPUMapMode.READ);
+      const result = viewFor(dtype, staging.getMappedRange().slice(0))[0];
+      staging.unmap();
+      this.bufferPool.release(staging);
+      for (const buf of buffersToRelease) this.bufferPool.release(buf);
+      return result;
     }
-    return result.slice(0, currentSize);
+
+    // Array result: hand the final buffer to a GPUArray. `finalize` either keeps it on
+    // the GPU or reads it back and frees it — so it must not also be released here.
+    for (const buf of buffersToRelease) {
+      if (buf !== currentBuffer) this.bufferPool.release(buf);
+    }
+    return finalize(
+      new GPUArray(currentBuffer, currentSize, dtype, device, this.bufferPool),
+      keepOnGpu
+    );
   }
 }

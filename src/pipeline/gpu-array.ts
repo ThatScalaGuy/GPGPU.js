@@ -28,6 +28,10 @@ export class GPUArray {
     return this.length * 4;
   }
 
+  get isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
   async toArray(): Promise<TypedArray> {
     if (this.destroyed) throw new Error("GPUArray has been destroyed");
 

@@ -1,10 +1,17 @@
-import type { DataType, NumericArray } from "../core/types";
-import { inferDataType } from "../core/types";
-import { toTypedArray } from "../utils/data-conversion";
+import type { DataType, TypedArray } from "../core/types";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
 import { uploadBuffer, viewFor } from "../core/command";
+import { GPUArray } from "../pipeline/gpu-array";
+import {
+  type OpInput,
+  type OpOptions,
+  inputDtype,
+  isGPUArray,
+  finalize,
+} from "../core/io";
+import { toTypedArray } from "../utils/data-conversion";
 import { computeWorkgroupCount } from "../utils/workgroup";
 import { bitonicSortShader } from "../codegen/templates";
 
@@ -22,37 +29,66 @@ const SORT_PAD: Record<DataType, number> = {
   u32: 4294967295,
 };
 
+export function gpuSort(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  input: OpInput,
+  opts: { keepOnGpu: true }
+): Promise<GPUArray>;
+export function gpuSort(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  input: OpInput,
+  opts?: OpOptions
+): Promise<TypedArray>;
 export async function gpuSort(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  input: NumericArray
-): Promise<Float32Array | Int32Array | Uint32Array> {
+  input: OpInput,
+  opts?: OpOptions
+): Promise<TypedArray | GPUArray> {
   const device = await deviceManager.getDevice();
-  const dtype = inferDataType(input);
-  const arr = toTypedArray(input, dtype);
-  const originalSize = arr.length;
+  const dtype = inputDtype(input);
+  const keepOnGpu = opts?.keepOnGpu ?? false;
 
-  // Pad to next power of 2 with the type's max value
+  const originalSize = isGPUArray(input) ? input.length : toTypedArray(input, dtype).length;
   const paddedSize = nextPowerOf2(originalSize);
-  const padded = viewFor(dtype, new ArrayBuffer(paddedSize * 4));
-  padded.set(arr);
-  for (let i = originalSize; i < paddedSize; i++) {
-    padded[i] = SORT_PAD[dtype];
-  }
-
   const byteSize = paddedSize * 4;
 
   const shader = bitonicSortShader(dtype);
   const pipeline = await shaderCache.getOrCreate(device, shader, `bitonic-sort-${dtype}`);
 
-  // Data buffer needs read_write storage + copy
+  // Data buffer needs read_write storage + copy (sorted in place).
   const bufData = bufferPool.acquire(
     device,
     byteSize,
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
   );
-  device.queue.writeBuffer(bufData, 0, padded.buffer as ArrayBuffer, padded.byteOffset, padded.byteLength);
+
+  if (isGPUArray(input)) {
+    if (input.isDestroyed) throw new Error("GPUArray has been destroyed");
+    // Copy the input (don't mutate it), then fill the pad lanes with the sentinel.
+    const copyEncoder = device.createCommandEncoder();
+    copyEncoder.copyBufferToBuffer(input.buffer, 0, bufData, 0, originalSize * 4);
+    device.queue.submit([copyEncoder.finish()]);
+    if (paddedSize > originalSize) {
+      const pad = viewFor(dtype, new ArrayBuffer((paddedSize - originalSize) * 4));
+      pad.fill(SORT_PAD[dtype]);
+      device.queue.writeBuffer(bufData, originalSize * 4, pad.buffer as ArrayBuffer, pad.byteOffset, pad.byteLength);
+    }
+  } else {
+    // Pad to next power of 2 with the type's max value, then upload in one shot.
+    const arr = toTypedArray(input, dtype);
+    const padded = viewFor(dtype, new ArrayBuffer(byteSize));
+    padded.set(arr);
+    for (let i = originalSize; i < paddedSize; i++) {
+      padded[i] = SORT_PAD[dtype];
+    }
+    device.queue.writeBuffer(bufData, 0, padded.buffer as ArrayBuffer, padded.byteOffset, padded.byteLength);
+  }
 
   const numPairs = paddedSize / 2;
   const workgroupCount = computeWorkgroupCount(numPairs);
@@ -83,23 +119,7 @@ export async function gpuSort(
     }
   }
 
-  // Read back result
-  const staging = bufferPool.acquire(
-    device,
-    byteSize,
-    GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-  );
-
-  const copyEncoder = device.createCommandEncoder();
-  copyEncoder.copyBufferToBuffer(bufData, 0, staging, 0, byteSize);
-  device.queue.submit([copyEncoder.finish()]);
-
-  await staging.mapAsync(GPUMapMode.READ);
-  const result = viewFor(dtype, staging.getMappedRange().slice(0));
-  staging.unmap();
-
-  bufferPool.release(staging);
-  bufferPool.release(bufData);
-
-  return result.slice(0, originalSize);
+  // Logical length is the original size; the pad tail is hidden by toArray's slice and
+  // by length-based binding when this GPUArray is fed into another op.
+  return finalize(new GPUArray(bufData, originalSize, dtype, device, bufferPool), keepOnGpu);
 }

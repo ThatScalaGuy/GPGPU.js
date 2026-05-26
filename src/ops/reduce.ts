@@ -1,10 +1,11 @@
-import type { DataType, NumericArray } from "../core/types";
-import { REDUCE_WORKGROUP_SIZE, inferDataType } from "../core/types";
+import type { DataType } from "../core/types";
+import { REDUCE_WORKGROUP_SIZE } from "../core/types";
 import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
 import { viewFor } from "../core/command";
+import { type OpInput, inputDtype, isGPUArray } from "../core/io";
 import { parseExpression } from "../codegen/expression-parser";
 import { emitWGSL, formatLiteral } from "../codegen/wgsl-emitter";
 import { reduceShader } from "../codegen/templates";
@@ -13,12 +14,12 @@ export async function gpuReduce(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  input: NumericArray,
+  input: OpInput,
   fn: ((a: number, b: number) => number) | string,
   identity: number
 ): Promise<number> {
   const device = await deviceManager.getDevice();
-  const dtype = inferDataType(input);
+  const dtype = inputDtype(input);
 
   const ir = parseExpression(fn, ["a", "b"]);
   const reduceExpr = emitWGSL(ir, dtype);
@@ -27,28 +28,42 @@ export async function gpuReduce(
   const shader = reduceShader(reduceExpr, identityStr, dtype);
   const pipeline = await shaderCache.getOrCreate(device, shader, `reduce-${dtype}`);
 
-  const inputData = toTypedArray(input, dtype);
-
-  if (inputData.length === 0) return identity;
-  if (inputData.length === 1) return inputData[0];
-
   // Ping-pong between two on-device buffers so the multi-pass reduction never
-  // round-trips through the CPU. Upload once, dispatch every pass into a single
-  // command encoder, read back only the final value.
+  // round-trips through the CPU. The first pass reads `src` and writes a separate
+  // `dst`, so a GPUArray input can serve as the initial `src` directly — no upload,
+  // and we must not release it.
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
-  const firstOutCount = Math.ceil(inputData.length / REDUCE_WORKGROUP_SIZE);
 
-  const bufA = bufferPool.acquire(device, inputData.byteLength, usage);
+  let initialSize: number;
+  let bufA: GPUBuffer;
+  let ownsA: boolean;
+
+  if (isGPUArray(input)) {
+    if (input.isDestroyed) throw new Error("GPUArray has been destroyed");
+    initialSize = input.length;
+    if (initialSize === 0) return identity;
+    bufA = input.buffer;
+    ownsA = false;
+  } else {
+    const inputData = toTypedArray(input, dtype);
+    if (inputData.length === 0) return identity;
+    if (inputData.length === 1) return inputData[0];
+    initialSize = inputData.length;
+    bufA = bufferPool.acquire(device, inputData.byteLength, usage);
+    device.queue.writeBuffer(
+      bufA, 0, inputData.buffer as ArrayBuffer, inputData.byteOffset, inputData.byteLength
+    );
+    ownsA = true;
+  }
+
+  const firstOutCount = Math.ceil(initialSize / REDUCE_WORKGROUP_SIZE);
   const bufB = bufferPool.acquire(device, firstOutCount * 4, usage);
-  device.queue.writeBuffer(
-    bufA, 0, inputData.buffer as ArrayBuffer, inputData.byteOffset, inputData.byteLength
-  );
 
   const encoder = device.createCommandEncoder();
 
   let src = bufA;
   let dst = bufB;
-  let size = inputData.length;
+  let size = initialSize;
 
   while (size > 1) {
     const workgroupCount = Math.ceil(size / REDUCE_WORKGROUP_SIZE);
@@ -83,8 +98,8 @@ export async function gpuReduce(
   staging.unmap();
 
   bufferPool.release(staging);
-  bufferPool.release(bufA);
   bufferPool.release(bufB);
+  if (ownsA) bufferPool.release(bufA);
 
   return result;
 }
@@ -93,7 +108,7 @@ export async function gpuSum(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  input: NumericArray
+  input: OpInput
 ): Promise<number> {
   return gpuReduce(deviceManager, bufferPool, shaderCache, input, (a, b) => a + b, 0);
 }
@@ -118,11 +133,11 @@ export async function gpuMin(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  input: NumericArray
+  input: OpInput
 ): Promise<number> {
   return gpuReduce(
     deviceManager, bufferPool, shaderCache, input,
-    "Math.min(a, b)", MIN_IDENTITY[inferDataType(input)]
+    "Math.min(a, b)", MIN_IDENTITY[inputDtype(input)]
   );
 }
 
@@ -130,11 +145,11 @@ export async function gpuMax(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  input: NumericArray
+  input: OpInput
 ): Promise<number> {
   return gpuReduce(
     deviceManager, bufferPool, shaderCache, input,
-    "Math.max(a, b)", MAX_IDENTITY[inferDataType(input)]
+    "Math.max(a, b)", MAX_IDENTITY[inputDtype(input)]
   );
 }
 
@@ -142,7 +157,7 @@ export async function gpuProduct(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  input: NumericArray
+  input: OpInput
 ): Promise<number> {
   return gpuReduce(deviceManager, bufferPool, shaderCache, input, (a, b) => a * b, 1);
 }
