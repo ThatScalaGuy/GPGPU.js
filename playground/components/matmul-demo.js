@@ -1,5 +1,5 @@
 import { LitElement, html, css } from "lit";
-import { gpu, parseNums, fmt } from "../lib/shared.js";
+import { gpu, parseNums, fmt, runWithStats } from "../lib/shared.js";
 import { controlStyles } from "./shared-styles.js";
 import "./demo-card.js";
 
@@ -47,6 +47,7 @@ export class MatmulDemo extends LitElement {
     result: { state: true },
     error: { state: true },
     busy: { state: true },
+    stats: { state: true },
   };
 
   constructor() {
@@ -59,12 +60,14 @@ export class MatmulDemo extends LitElement {
     this.result = null;
     this.error = "";
     this.busy = false;
+    this.stats = null;
   }
 
   async run() {
     this.busy = true;
     this.error = "";
     this.result = null;
+    this.stats = null;
     try {
       const a = parseNums(this.a);
       const b = parseNums(this.b);
@@ -73,7 +76,8 @@ export class MatmulDemo extends LitElement {
         colsA: Number(this.colsA),
         colsB: Number(this.colsB),
       };
-      const flat = await gpu.matmul(a, b, opts);
+      const { result: flat, stats } = await runWithStats(() => gpu.matmul(a, b, opts));
+      this.stats = stats;
       this.result = { flat, rows: opts.rowsA, cols: opts.colsB };
     } catch (e) {
       this.error = String(e?.message ?? e);
@@ -100,6 +104,7 @@ export class MatmulDemo extends LitElement {
         description="A neural-net layer or 2D transform. Matrices are flat arrays plus explicit dimensions."
         .error=${this.error}
         .busy=${this.busy}
+        .stats=${this.stats}
         @run=${this.run}
       >
         <label>

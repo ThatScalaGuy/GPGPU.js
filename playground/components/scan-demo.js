@@ -1,5 +1,5 @@
 import { LitElement, html } from "lit";
-import { gpu, parseNums, fmt } from "../lib/shared.js";
+import { gpu, parseNums, fmt, runWithStats } from "../lib/shared.js";
 import { controlStyles } from "./shared-styles.js";
 import "./demo-card.js";
 
@@ -16,6 +16,7 @@ export class ScanDemo extends LitElement {
     output: { state: true },
     error: { state: true },
     busy: { state: true },
+    stats: { state: true },
   };
 
   constructor() {
@@ -25,18 +26,22 @@ export class ScanDemo extends LitElement {
     this.output = "";
     this.error = "";
     this.busy = false;
+    this.stats = null;
   }
 
   async run() {
     this.busy = true;
     this.error = "";
     this.output = "";
+    this.stats = null;
     try {
       const input = parseNums(this.input);
-      const result =
+      const { result, stats } = await runWithStats(() =>
         this.kind === "product"
-          ? await gpu.scan(input, (a, b) => a * b, 1)
-          : await gpu.scan(input);
+          ? gpu.scan(input, (a, b) => a * b, 1)
+          : gpu.scan(input)
+      );
+      this.stats = stats;
       const op = this.kind === "product" ? "running product" : "running total";
       this.output = `input  ${fmt(input)}\n${op}  ${fmt(result)}`;
     } catch (e) {
@@ -54,6 +59,7 @@ export class ScanDemo extends LitElement {
         .output=${this.output}
         .error=${this.error}
         .busy=${this.busy}
+        .stats=${this.stats}
         @run=${this.run}
       >
         <label>

@@ -3,6 +3,23 @@ import { gpu } from "@thatscalaguy/gpgpu.js";
 
 export { gpu };
 
+// Record the backend + timing of the most recent op. Demos run one at a time
+// (a single Run click awaits one op), so the last stat belongs to that op.
+let _lastStats = null;
+gpu.onStats = (s) => {
+  _lastStats = s;
+};
+
+/**
+ * Run a single gpu.* call and capture its { backend, ms } stats.
+ * Returns { result, stats } so a demo can show a backend badge.
+ */
+export async function runWithStats(fn) {
+  _lastStats = null;
+  const result = await fn();
+  return { result, stats: _lastStats };
+}
+
 /** Parse a comma/space/newline-separated string into a number[]. */
 export function parseNums(str) {
   return str

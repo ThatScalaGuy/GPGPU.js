@@ -1,4 +1,4 @@
-import type { TypedArray } from "../core/types";
+import type { OpStats, TypedArray } from "../core/types";
 import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
@@ -30,15 +30,18 @@ export class Pipeline {
   private deviceManager: DeviceManager;
   private bufferPool: BufferPool;
   private shaderCache: ShaderCache;
+  private onStats?: (stats: OpStats) => void;
 
   constructor(
     deviceManager: DeviceManager,
     bufferPool: BufferPool,
-    shaderCache: ShaderCache
+    shaderCache: ShaderCache,
+    onStats?: (stats: OpStats) => void
   ) {
     this.deviceManager = deviceManager;
     this.bufferPool = bufferPool;
     this.shaderCache = shaderCache;
+    this.onStats = onStats;
   }
 
   map(fn: ((x: number) => number) | string): Pipeline {
@@ -55,6 +58,7 @@ export class Pipeline {
   }
 
   async run(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray | number> {
+    const t0 = performance.now();
     const device = await this.deviceManager.getDevice();
     const dtype = inputDtype(input);
     const hasGpuInput = isGPUArray(input);
@@ -162,6 +166,7 @@ export class Pipeline {
       staging.unmap();
       this.bufferPool.release(staging);
       for (const buf of buffersToRelease) this.bufferPool.release(buf);
+      this.onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
       return result;
     }
 
@@ -170,9 +175,11 @@ export class Pipeline {
     for (const buf of buffersToRelease) {
       if (buf !== currentBuffer) this.bufferPool.release(buf);
     }
-    return finalize(
+    const out = await finalize(
       new GPUArray(currentBuffer, currentSize, dtype, device, this.bufferPool),
       keepOnGpu
     );
+    this.onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
+    return out;
   }
 }

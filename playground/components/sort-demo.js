@@ -1,5 +1,5 @@
 import { LitElement, html } from "lit";
-import { gpu, fmt, timeit } from "../lib/shared.js";
+import { gpu, fmt, timeit, runWithStats } from "../lib/shared.js";
 import { controlStyles } from "./shared-styles.js";
 import "./demo-card.js";
 
@@ -19,6 +19,7 @@ export class SortDemo extends LitElement {
     output: { state: true },
     error: { state: true },
     busy: { state: true },
+    stats: { state: true },
   };
 
   constructor() {
@@ -27,17 +28,22 @@ export class SortDemo extends LitElement {
     this.output = "";
     this.error = "";
     this.busy = false;
+    this.stats = null;
   }
 
   async run() {
     this.busy = true;
     this.error = "";
     this.output = "";
+    this.stats = null;
     try {
       const n = Number(this.n);
       const data = Float32Array.from({ length: n }, () => Math.random() * 1000);
 
-      const { result: sorted, ms: gpuMs } = await timeit(() => gpu.sort(data));
+      const { result: { result: sorted, stats }, ms: gpuMs } = await timeit(() =>
+        runWithStats(() => gpu.sort(data))
+      );
+      this.stats = stats;
       const { ms: jsMs } = await timeit(async () => data.slice().sort((a, b) => a - b));
 
       const preview = fmt(sorted.slice(0, 8));
@@ -61,6 +67,7 @@ export class SortDemo extends LitElement {
         .output=${this.output}
         .error=${this.error}
         .busy=${this.busy}
+        .stats=${this.stats}
         @run=${this.run}
       >
         <label>

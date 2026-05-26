@@ -1,5 +1,5 @@
 import { LitElement, html, css } from "lit";
-import { gpu, parseNums, fmt } from "../lib/shared.js";
+import { gpu, parseNums, fmt, runWithStats } from "../lib/shared.js";
 import { controlStyles } from "./shared-styles.js";
 import "./demo-card.js";
 
@@ -31,6 +31,7 @@ export class PipelineDemo extends LitElement {
     output: { state: true },
     error: { state: true },
     busy: { state: true },
+    stats: { state: true },
   };
 
   constructor() {
@@ -39,19 +40,24 @@ export class PipelineDemo extends LitElement {
     this.output = "";
     this.error = "";
     this.busy = false;
+    this.stats = null;
   }
 
   async run() {
     this.busy = true;
     this.error = "";
     this.output = "";
+    this.stats = null;
     try {
       const input = parseNums(this.input);
-      const result = await gpu
-        .pipeline()
-        .map((x) => x * 2)
-        .map((x) => x + 1)
-        .run(input);
+      const { result, stats } = await runWithStats(() =>
+        gpu
+          .pipeline()
+          .map((x) => x * 2)
+          .map((x) => x + 1)
+          .run(input)
+      );
+      this.stats = stats;
       this.output = `input  ${fmt(input)}\nresult ${fmt(result)}`;
     } catch (e) {
       this.error = String(e?.message ?? e);
@@ -68,6 +74,7 @@ export class PipelineDemo extends LitElement {
         .output=${this.output}
         .error=${this.error}
         .busy=${this.busy}
+        .stats=${this.stats}
         @run=${this.run}
       >
         <label>

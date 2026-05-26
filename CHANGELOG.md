@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legal only for integer dtypes (`i32`/`u32`). Enables hashing, bitmasks, and exact
   integer counters that were previously impossible.
 - Exported a `TypedArray` type (`Float32Array | Int32Array | Uint32Array`).
+- **Backend observability and fallback control.** A GPU op that fails no longer
+  *only* falls back via `console.warn` — callers can now see which backend ran,
+  time each op, and opt out of the silent fallback. Configure on the instance
+  (`new GPU(opts)` or mutable `gpu.fallback` / `gpu.onStats` / `gpu.onFallback`
+  fields):
+  - `onStats({ op, backend, ms })` fires after **every** op (`backend` is
+    `"gpu"` or `"cpu"`), including GPU-resident, `createKernel`, and `pipeline`
+    runs. The reduce family still returns a `number` but reports stats too.
+  - `onFallback({ op, error })` fires when a GPU op throws, before the policy is
+    applied.
+  - `fallback` policy: `"warn"` (default, unchanged behavior), `"silent"`
+    (fall back without logging), or `"throw"` (re-throw instead of falling back).
+  - New exported types: `Backend`, `OpStats`, `FallbackInfo`, `FallbackMode`,
+    `GPUOptions`.
 
 ### Changed
 

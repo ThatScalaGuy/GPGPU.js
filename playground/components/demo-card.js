@@ -12,6 +12,7 @@ import { LitElement, html, css } from "lit";
  *   error              — string shown as an error (takes precedence)
  *   busy               — disables the Run button and shows "Running…"
  *   runLabel           — Run button text (default "Run")
+ *   stats              — { backend, ms } shown as a badge after a run
  * Events:
  *   "run" — fired when the Run button is clicked
  */
@@ -23,6 +24,7 @@ export class DemoCard extends LitElement {
     error: { type: String },
     busy: { type: Boolean },
     runLabel: { type: String },
+    stats: { type: Object },
   };
 
   constructor() {
@@ -33,6 +35,7 @@ export class DemoCard extends LitElement {
     this.error = "";
     this.busy = false;
     this.runLabel = "Run";
+    this.stats = null;
   }
 
   static styles = css`
@@ -86,6 +89,23 @@ export class DemoCard extends LitElement {
       opacity: 0.55;
       cursor: default;
     }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      padding: var(--space-1) var(--space-3);
+      border-radius: 999px;
+    }
+    .badge.gpu {
+      background: var(--color-success-bg);
+      color: var(--color-success);
+    }
+    .badge.cpu {
+      background: var(--color-code-bg);
+      color: var(--color-text-muted);
+    }
     .output {
       margin: var(--space-4) 0 0;
       padding: var(--space-3) var(--space-4);
@@ -116,6 +136,11 @@ export class DemoCard extends LitElement {
         <button class="run" ?disabled=${this.busy} @click=${this._onRun}>
           ${this.busy ? "Running…" : this.runLabel}
         </button>
+        ${this.stats
+          ? html`<span class="badge ${this.stats.backend}">
+              ${this.stats.backend.toUpperCase()} · ${this.stats.ms.toFixed(2)} ms
+            </span>`
+          : ""}
         <slot name="footer"></slot>
       </div>
       ${this.error
