@@ -56,6 +56,17 @@ export class GpgpuApp extends LitElement {
       color: var(--color-text-muted);
       font-size: var(--font-size-sm);
     }
+    .badges {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+      margin: var(--space-3) 0 0;
+    }
+    .badges img {
+      display: block;
+      height: 20px;
+    }
     .top-right {
       display: flex;
       align-items: center;
@@ -118,6 +129,38 @@ export class GpgpuApp extends LitElement {
           <p class="tagline">
             GPU-accelerated array math in the browser via WebGPU — interactive demos of every feature.
           </p>
+          <div class="badges">
+            <a
+              href="https://github.com/ThatScalaGuy/GPGPU.js"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img
+                src="https://img.shields.io/github/stars/ThatScalaGuy/GPGPU.js?style=flat&logo=github"
+                alt="GitHub stars"
+              />
+            </a>
+            <a
+              href="https://www.npmjs.com/package/@thatscalaguy/gpgpu.js"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img
+                src="https://img.shields.io/npm/v/%40thatscalaguy%2Fgpgpu.js?logo=npm"
+                alt="npm version"
+              />
+            </a>
+            <a
+              href="https://www.npmjs.com/package/@thatscalaguy/gpgpu.js"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img
+                src="https://img.shields.io/npm/dm/%40thatscalaguy%2Fgpgpu.js?logo=npm"
+                alt="npm downloads"
+              />
+            </a>
+          </div>
         </div>
         <div class="top-right">
           ${this.available
