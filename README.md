@@ -210,6 +210,39 @@ const myGpu = new GPU();
 myGpu.destroy(); // cleanup when done
 ```
 
+### Backend & Fallback Control
+
+When an op can't run on the GPU it falls back to a CPU implementation. By default
+that's silent apart from a `console.warn`, so callers can't tell which backend
+ran, how long it took, or stop the fallback from happening. Configure these on
+the instance — at construction or via mutable fields — and every op honours them:
+
+```javascript
+import { GPU } from "@thatscalaguy/gpgpu.js";
+
+const gpu = new GPU({
+  // "warn" (default) logs + falls back, "silent" falls back quietly,
+  // "throw" re-throws the GPU error instead of falling back.
+  fallback: "throw",
+  // Fires after every op with the backend that ran and how long it took.
+  onStats: ({ op, backend, ms }) => console.log(`${op} ran on ${backend} in ${ms.toFixed(2)}ms`),
+  // Fires when a GPU op throws, before the fallback policy is applied.
+  onFallback: ({ op, error }) => report(op, error),
+});
+
+// Fields are mutable too:
+gpu.onStats = (s) => metrics.record(s);
+gpu.fallback = "silent";
+```
+
+- `onStats` reports `{ op, backend: "gpu" | "cpu", ms }` for **every** op,
+  including GPU-resident and `createKernel`/`pipeline` runs (always `"gpu"`).
+  The reduce family (`reduce`/`sum`/`min`/`max`/`product`) still returns a
+  scalar `number` but reports stats just like the rest.
+- `onFallback` and the `fallback` policy apply only to ops with a CPU fallback;
+  forced-GPU paths (a `GPUArray` input, `keepOnGpu`, custom kernels) throw on
+  failure regardless.
+
 ## How It Works
 
 1. **You write JavaScript** — `x => x * 2 + 1`

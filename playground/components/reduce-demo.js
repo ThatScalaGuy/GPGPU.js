@@ -1,5 +1,5 @@
 import { LitElement, html } from "lit";
-import { gpu, parseNums, fmt } from "../lib/shared.js";
+import { gpu, parseNums, fmt, runWithStats } from "../lib/shared.js";
 import { controlStyles } from "./shared-styles.js";
 import "./demo-card.js";
 
@@ -17,6 +17,7 @@ export class ReduceDemo extends LitElement {
     output: { state: true },
     error: { state: true },
     busy: { state: true },
+    stats: { state: true },
   };
 
   constructor() {
@@ -28,20 +29,22 @@ export class ReduceDemo extends LitElement {
     this.output = "";
     this.error = "";
     this.busy = false;
+    this.stats = null;
   }
 
   async run() {
     this.busy = true;
     this.error = "";
     this.output = "";
+    this.stats = null;
     try {
       const input = parseNums(this.input);
-      let result;
-      if (this.kind === "custom") {
-        result = await gpu.reduce(input, this.fn, Number(this.identity));
-      } else {
-        result = await gpu[this.kind](input);
-      }
+      const { result, stats } = await runWithStats(() =>
+        this.kind === "custom"
+          ? gpu.reduce(input, this.fn, Number(this.identity))
+          : gpu[this.kind](input)
+      );
+      this.stats = stats;
       const label = this.kind === "custom" ? `reduce(${this.fn}, ${this.identity})` : this.kind;
       this.output = `${label} of ${fmt(input)}\n= ${fmt(result)}`;
     } catch (e) {
@@ -59,6 +62,7 @@ export class ReduceDemo extends LitElement {
         .output=${this.output}
         .error=${this.error}
         .busy=${this.busy}
+        .stats=${this.stats}
         @run=${this.run}
       >
         <label>

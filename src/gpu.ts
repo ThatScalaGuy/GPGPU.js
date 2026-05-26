@@ -1,4 +1,7 @@
-import type { NumericArray, TypedArray, MatMulOpts, KernelConfig } from "./core/types";
+import type {
+  NumericArray, TypedArray, MatMulOpts, KernelConfig,
+  FallbackInfo, FallbackMode, GPUOptions, OpStats,
+} from "./core/types";
 import { inferDataType } from "./core/types";
 import { DeviceManager } from "./core/device";
 import { BufferPool } from "./core/buffer-pool";
@@ -12,7 +15,7 @@ import {
   resolveInput,
   finalize,
 } from "./core/io";
-import { withFallback } from "./fallback/index";
+import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
@@ -33,9 +36,36 @@ export class GPU {
   private bufferPool = new BufferPool();
   private shaderCache = new ShaderCache();
 
+  /** What to do when a GPU op fails and a CPU fallback exists. Default `"warn"`. */
+  fallback: FallbackMode;
+  /** Called when a GPU op throws, before the fallback policy is applied. */
+  onFallback?: (info: FallbackInfo) => void;
+  /** Called after every op with the backend that ran and how long it took. */
+  onStats?: (stats: OpStats) => void;
+
+  constructor(opts?: GPUOptions) {
+    this.fallback = opts?.fallback ?? "warn";
+    this.onFallback = opts?.onFallback;
+    this.onStats = opts?.onStats;
+  }
+
   /** Check if WebGPU is available */
   isAvailable(): boolean {
     return this.deviceManager.isAvailable();
+  }
+
+  private fallbackConfig(): FallbackConfig {
+    return { mode: this.fallback, onFallback: this.onFallback, onStats: this.onStats };
+  }
+
+  // Time a forced-GPU op (GPUArray input, keepOnGpu, or custom kernel) and report
+  // its stats. These paths have no CPU alternative, so the fallback policy and
+  // onFallback hook do not apply — a GPU failure simply throws.
+  private async timedGpu<T>(op: string, fn: () => Promise<T>): Promise<T> {
+    const t = performance.now();
+    const r = await fn();
+    this.onStats?.({ op, backend: "gpu", ms: performance.now() - t });
+    return r;
   }
 
   /** Upload a CPU array to the GPU and keep it resident as a GPUArray. */
@@ -54,25 +84,27 @@ export class GPU {
   // op runs through the CPU fallback as before. `keepOnGpu` defaults to "auto": true when
   // any input is already a GPUArray.
   private runArrayOp(
+    op: string,
     gpuFn: (keepOnGpu: boolean) => Promise<TypedArray | GPUArray>,
     cpuFn: () => TypedArray,
     hasGpuInput: boolean,
     keepOnGpu: boolean
   ): Promise<TypedArray | GPUArray> {
     if (hasGpuInput || keepOnGpu) {
-      return gpuFn(keepOnGpu);
+      return this.timedGpu(op, () => gpuFn(keepOnGpu));
     }
-    return withFallback(this.deviceManager, () => gpuFn(false), cpuFn);
+    return withFallback(this.deviceManager, op, () => gpuFn(false), cpuFn, this.fallbackConfig());
   }
 
   // A GPUArray input forces the GPU path for a scalar-returning op (reduce family).
   private runScalarOp(
+    op: string,
     gpuFn: () => Promise<number>,
     cpuFn: () => number,
     hasGpuInput: boolean
   ): Promise<number> {
-    if (hasGpuInput) return gpuFn();
-    return withFallback(this.deviceManager, gpuFn, cpuFn);
+    if (hasGpuInput) return this.timedGpu(op, gpuFn);
+    return withFallback(this.deviceManager, op, gpuFn, cpuFn, this.fallbackConfig());
   }
 
   // --- Elementwise operations ---
@@ -81,31 +113,32 @@ export class GPU {
   add(a: OpInput, b: OpInput | number, opts: { keepOnGpu: true }): Promise<GPUArray>;
   add(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray>;
   add(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray> {
-    return this.binaryOp(a, b, "+", cpuAdd, opts);
+    return this.binaryOp("add", a, b, "+", cpuAdd, opts);
   }
 
   subtract(a: NumericArray, b: NumericArray | number): Promise<TypedArray>;
   subtract(a: OpInput, b: OpInput | number, opts: { keepOnGpu: true }): Promise<GPUArray>;
   subtract(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray>;
   subtract(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray> {
-    return this.binaryOp(a, b, "-", cpuSubtract, opts);
+    return this.binaryOp("subtract", a, b, "-", cpuSubtract, opts);
   }
 
   multiply(a: NumericArray, b: NumericArray | number): Promise<TypedArray>;
   multiply(a: OpInput, b: OpInput | number, opts: { keepOnGpu: true }): Promise<GPUArray>;
   multiply(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray>;
   multiply(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray> {
-    return this.binaryOp(a, b, "*", cpuMultiply, opts);
+    return this.binaryOp("multiply", a, b, "*", cpuMultiply, opts);
   }
 
   divide(a: NumericArray, b: NumericArray | number): Promise<TypedArray>;
   divide(a: OpInput, b: OpInput | number, opts: { keepOnGpu: true }): Promise<GPUArray>;
   divide(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray>;
   divide(a: OpInput, b: OpInput | number, opts?: OpOptions): Promise<TypedArray | GPUArray> {
-    return this.binaryOp(a, b, "/", cpuDivide, opts);
+    return this.binaryOp("divide", a, b, "/", cpuDivide, opts);
   }
 
   private binaryOp(
+    name: string,
     a: OpInput,
     b: OpInput | number,
     op: string,
@@ -115,6 +148,7 @@ export class GPU {
     const hasGpu = isGPUArray(a) || isGPUArray(b);
     const keep = opts?.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
+      name,
       (k) =>
         typeof b === "number"
           ? gpuScalarBroadcast(this.deviceManager, this.bufferPool, this.shaderCache, a, b, op, { keepOnGpu: k } as { keepOnGpu: true })
@@ -138,6 +172,7 @@ export class GPU {
     const hasGpu = isGPUArray(input);
     const keep = opts?.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
+      "map",
       (k) => gpuMap(this.deviceManager, this.bufferPool, this.shaderCache, input, fn, { keepOnGpu: k } as { keepOnGpu: true }),
       () => cpuMap(input as NumericArray, fn),
       hasGpu,
@@ -153,6 +188,7 @@ export class GPU {
     identity: number
   ): Promise<number> {
     return this.runScalarOp(
+      "reduce",
       () => gpuReduce(this.deviceManager, this.bufferPool, this.shaderCache, input, fn, identity),
       () => cpuReduce(input as NumericArray, fn, identity),
       isGPUArray(input)
@@ -161,6 +197,7 @@ export class GPU {
 
   sum(input: OpInput): Promise<number> {
     return this.runScalarOp(
+      "sum",
       () => gpuSum(this.deviceManager, this.bufferPool, this.shaderCache, input),
       () => cpuSum(input as NumericArray),
       isGPUArray(input)
@@ -169,6 +206,7 @@ export class GPU {
 
   min(input: OpInput): Promise<number> {
     return this.runScalarOp(
+      "min",
       () => gpuMin(this.deviceManager, this.bufferPool, this.shaderCache, input),
       () => cpuMin(input as NumericArray),
       isGPUArray(input)
@@ -177,6 +215,7 @@ export class GPU {
 
   max(input: OpInput): Promise<number> {
     return this.runScalarOp(
+      "max",
       () => gpuMax(this.deviceManager, this.bufferPool, this.shaderCache, input),
       () => cpuMax(input as NumericArray),
       isGPUArray(input)
@@ -185,6 +224,7 @@ export class GPU {
 
   product(input: OpInput): Promise<number> {
     return this.runScalarOp(
+      "product",
       () => gpuProduct(this.deviceManager, this.bufferPool, this.shaderCache, input),
       () => cpuProduct(input as NumericArray),
       isGPUArray(input)
@@ -204,6 +244,7 @@ export class GPU {
     const hasGpu = isGPUArray(a) || isGPUArray(b);
     const keep = opts.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
+      "matmul",
       (k) => gpuMatmul(this.deviceManager, this.bufferPool, this.shaderCache, a, b, { ...opts, keepOnGpu: k } as MatMulOpts & { keepOnGpu: true }),
       () => cpuMatmul(a as NumericArray, b as NumericArray, opts),
       hasGpu,
@@ -225,6 +266,7 @@ export class GPU {
     const hasGpu = isGPUArray(input);
     const keep = opts?.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
+      "scan",
       (k) => gpuScan(this.deviceManager, this.bufferPool, this.shaderCache, input, fn, identity, { keepOnGpu: k } as { keepOnGpu: true }),
       () => cpuScan(input as NumericArray, fn ?? ((a, b) => a + b), identity ?? 0),
       hasGpu,
@@ -241,6 +283,7 @@ export class GPU {
     const hasGpu = isGPUArray(input);
     const keep = opts?.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
+      "sort",
       (k) => gpuSort(this.deviceManager, this.bufferPool, this.shaderCache, input, { keepOnGpu: k } as { keepOnGpu: true }),
       () => cpuSort(input as NumericArray),
       hasGpu,
@@ -251,7 +294,7 @@ export class GPU {
   // --- Pipeline builder ---
 
   pipeline(): Pipeline {
-    return new Pipeline(this.deviceManager, this.bufferPool, this.shaderCache);
+    return new Pipeline(this.deviceManager, this.bufferPool, this.shaderCache, this.onStats);
   }
 
   // --- Custom kernel ---
@@ -298,15 +341,17 @@ export class GPU {
           entries,
         });
 
-        const workgroupCount = computeWorkgroupCount(config.output.size, workgroupSize);
-        dispatchOnly(device, pipeline, bindGroup, [workgroupCount]);
+        return this.timedGpu("kernel", () => {
+          const workgroupCount = computeWorkgroupCount(config.output.size, workgroupSize);
+          dispatchOnly(device, pipeline, bindGroup, [workgroupCount]);
 
-        for (const r of resolved) r.release();
+          for (const r of resolved) r.release();
 
-        return finalize(
-          new GPUArray(outputBuffer, config.output.size, config.output.type, device, this.bufferPool),
-          keepOnGpu
-        );
+          return finalize(
+            new GPUArray(outputBuffer, config.output.size, config.output.type, device, this.bufferPool),
+            keepOnGpu
+          );
+        });
       },
     };
   }

@@ -8,6 +8,11 @@ export type {
   KernelConfig,
   MatMulOpts,
   BufferSpec,
+  Backend,
+  OpStats,
+  FallbackInfo,
+  FallbackMode,
+  GPUOptions,
 } from "./core/types";
 
 import { GPU } from "./gpu";

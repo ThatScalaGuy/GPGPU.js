@@ -23,6 +23,36 @@ export interface MatMulOpts {
   colsB: number;
 }
 
+/** Which backend actually executed an op. */
+export type Backend = "gpu" | "cpu";
+
+/** Per-op telemetry reported to the `onStats` hook. */
+export interface OpStats {
+  op: string;
+  backend: Backend;
+  ms: number;
+}
+
+/** Passed to the `onFallback` hook when a GPU op fails. */
+export interface FallbackInfo {
+  op: string;
+  error: unknown;
+}
+
+/**
+ * What happens when a GPU op fails and a CPU implementation exists:
+ * `"warn"` (default) logs and falls back, `"silent"` falls back quietly,
+ * `"throw"` re-throws instead of falling back.
+ */
+export type FallbackMode = "warn" | "silent" | "throw";
+
+/** Instance-level configuration for a {@link GPU}. */
+export interface GPUOptions {
+  fallback?: FallbackMode;
+  onFallback?: (info: FallbackInfo) => void;
+  onStats?: (stats: OpStats) => void;
+}
+
 export interface DispatchOpts {
   device: GPUDevice;
   pipeline: GPUComputePipeline;
