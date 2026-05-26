@@ -1,30 +1,75 @@
-import type { NumericArray } from "../core/types";
-import { DEFAULT_WORKGROUP_SIZE, inferDataType } from "../core/types";
+import type { TypedArray } from "../core/types";
+import { DEFAULT_WORKGROUP_SIZE } from "../core/types";
 import { toTypedArray } from "../utils/data-conversion";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
-import { viewFor } from "../core/command";
+import { GPUArray } from "../pipeline/gpu-array";
+import {
+  type OpInput,
+  type OpOptions,
+  inputDtype,
+  isGPUArray,
+  finalize,
+} from "../core/io";
 import { parseExpression } from "../codegen/expression-parser";
 import { emitWGSL, formatLiteral } from "../codegen/wgsl-emitter";
 import { blockScanShader, scanAddOffsetsShader } from "../codegen/templates";
 
 const WG = DEFAULT_WORKGROUP_SIZE;
 
+type ScanFn = ((a: number, b: number) => number) | string;
+
+export function gpuScan(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  input: OpInput,
+  fn: ScanFn | undefined,
+  identity: number | undefined,
+  opts: { keepOnGpu: true }
+): Promise<GPUArray>;
+export function gpuScan(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  input: OpInput,
+  fn?: ScanFn,
+  identity?: number,
+  opts?: OpOptions
+): Promise<TypedArray>;
 export async function gpuScan(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
-  input: NumericArray,
-  fn: ((a: number, b: number) => number) | string = (a, b) => a + b,
-  identity: number = 0
-): Promise<Float32Array | Int32Array | Uint32Array> {
-  const dtype = inferDataType(input);
-  const arr = toTypedArray(input, dtype);
-  const size = arr.length;
-  if (size === 0) return toTypedArray([], dtype);
-
+  input: OpInput,
+  fn: ScanFn = (a, b) => a + b,
+  identity: number = 0,
+  opts?: OpOptions
+): Promise<TypedArray | GPUArray> {
+  const dtype = inputDtype(input);
   const device = await deviceManager.getDevice();
+  const keepOnGpu = opts?.keepOnGpu ?? false;
+
+  const storageUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
+
+  // Resolve length + how to seed the working buffer without mutating a GPUArray input.
+  let size: number;
+  let srcArr: TypedArray | null = null;
+  if (isGPUArray(input)) {
+    if (input.isDestroyed) throw new Error("GPUArray has been destroyed");
+    size = input.length;
+  } else {
+    srcArr = toTypedArray(input, dtype);
+    size = srcArr.length;
+  }
+
+  if (size === 0) {
+    return finalize(
+      new GPUArray(bufferPool.acquire(device, 4, storageUsage), 0, dtype, device, bufferPool),
+      keepOnGpu
+    );
+  }
 
   const ir = parseExpression(fn, ["a", "b"]);
   const scanExpr = emitWGSL(ir, dtype);
@@ -39,12 +84,19 @@ export async function gpuScan(
 
   // Single command encoder for every level so the multi-block scan never round-trips
   // through the CPU between passes (mirrors the gpuReduce design).
-  const storageUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
   const dataBuf = bufferPool.acquire(device, size * 4, storageUsage);
-  device.queue.writeBuffer(dataBuf, 0, arr.buffer as ArrayBuffer, arr.byteOffset, arr.byteLength);
 
   const encoder = device.createCommandEncoder();
-  const cleanup: GPUBuffer[] = [dataBuf];
+
+  // Seed the (in-place) working buffer. A GPUArray input is copied so we never mutate it.
+  if (srcArr) {
+    device.queue.writeBuffer(dataBuf, 0, srcArr.buffer as ArrayBuffer, srcArr.byteOffset, srcArr.byteLength);
+  } else {
+    encoder.copyBufferToBuffer((input as GPUArray).buffer, 0, dataBuf, 0, size * 4);
+  }
+
+  // Temp buffers (block sums + params); dataBuf is kept for the result.
+  const cleanup: GPUBuffer[] = [];
 
   const makeParams = (n: number): GPUBuffer => {
     const buf = bufferPool.acquire(device, 4, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
@@ -97,20 +149,9 @@ export async function gpuScan(
   };
 
   scanRec(dataBuf, size);
-
-  const byteSize = size * 4;
-  const staging = bufferPool.acquire(
-    device, byteSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-  );
-  encoder.copyBufferToBuffer(dataBuf, 0, staging, 0, byteSize);
   device.queue.submit([encoder.finish()]);
 
-  await staging.mapAsync(GPUMapMode.READ);
-  const result = viewFor(dtype, staging.getMappedRange().slice(0));
-  staging.unmap();
-
-  bufferPool.release(staging);
   for (const buf of cleanup) bufferPool.release(buf);
 
-  return result.slice(0, size);
+  return finalize(new GPUArray(dataBuf, size, dtype, device, bufferPool), keepOnGpu);
 }
