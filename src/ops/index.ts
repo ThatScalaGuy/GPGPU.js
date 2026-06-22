@@ -1,6 +1,7 @@
 export { gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip } from "./elementwise";
 export { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct, gpuArgmin, gpuArgmax } from "./reduce";
 export { gpuGather } from "./gather";
+export { gpuSearchsorted } from "./searchsorted";
 export { gpuCast } from "./cast";
 export { gpuTranspose } from "./transpose";
 export { gpuScatter } from "./scatter";

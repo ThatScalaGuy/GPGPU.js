@@ -1,5 +1,5 @@
 import type {
-  NumericArray, TypedArray, DataType, MatMulOpts, ScatterOpts, HistogramOpts, TransposeOpts, KernelConfig,
+  NumericArray, TypedArray, DataType, MatMulOpts, ScatterOpts, SearchSortedOpts, HistogramOpts, TransposeOpts, KernelConfig,
   FallbackInfo, FallbackMode, GPUOptions, OpStats,
 } from "./core/types";
 import { inferDataType } from "./core/types";
@@ -20,7 +20,7 @@ import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
-  cpuArgmin, cpuArgmax, cpuGather, cpuCast, cpuTranspose, cpuScatter, cpuHistogram,
+  cpuArgmin, cpuArgmax, cpuGather, cpuSearchsorted, cpuCast, cpuTranspose, cpuScatter, cpuHistogram,
   cpuMatmul, cpuScan, cpuSort, cpuSortByKey,
 } from "./fallback/cpu-ops";
 import {
@@ -28,6 +28,7 @@ import {
 } from "./ops/elementwise";
 import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct, gpuArgmin, gpuArgmax } from "./ops/reduce";
 import { gpuGather } from "./ops/gather";
+import { gpuSearchsorted } from "./ops/searchsorted";
 import { gpuCast } from "./ops/cast";
 import { gpuTranspose } from "./ops/transpose";
 import { gpuScatter } from "./ops/scatter";
@@ -297,6 +298,27 @@ export class GPU {
       "gather",
       (k) => gpuGather(this.deviceManager, this.bufferPool, this.shaderCache, src, idx, { keepOnGpu: k } as { keepOnGpu: true }),
       () => cpuGather(src as NumericArray, idx as NumericArray),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Searchsorted ---
+
+  searchsorted(sorted: NumericArray, queries: NumericArray, opts?: SearchSortedOpts): Promise<Uint32Array>;
+  searchsorted(sorted: OpInput, queries: OpInput, opts: SearchSortedOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  searchsorted(sorted: OpInput, queries: OpInput, opts?: SearchSortedOpts & OpOptions): Promise<TypedArray | GPUArray>;
+  searchsorted(
+    sorted: OpInput,
+    queries: OpInput,
+    opts?: SearchSortedOpts & OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(sorted) || isGPUArray(queries);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "searchsorted",
+      (k) => gpuSearchsorted(this.deviceManager, this.bufferPool, this.shaderCache, sorted, queries, { ...opts, keepOnGpu: k } as SearchSortedOpts & { keepOnGpu: true }),
+      () => cpuSearchsorted(sorted as NumericArray, queries as NumericArray, opts?.side),
       hasGpu,
       keep
     );

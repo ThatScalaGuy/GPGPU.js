@@ -194,6 +194,32 @@ export function cpuGather(src: NumericArray, idx: NumericArray): TypedArray {
   return result;
 }
 
+// Per-query binary search for the insertion index into an ascending `sorted` array.
+// left (lower_bound) counts elements < q; right (upper_bound) counts elements <= q.
+// `sorted` is assumed ascending; results are undefined otherwise. Output is always u32.
+export function cpuSearchsorted(
+  sorted: NumericArray,
+  queries: NumericArray,
+  side: "left" | "right" = "left"
+): Uint32Array {
+  const dtype = inferDataType(sorted);
+  const s = toTypedArray(sorted, dtype);
+  const q = toTypedArray(queries, dtype);
+  const out = new Uint32Array(q.length);
+  for (let i = 0; i < q.length; i++) {
+    let lo = 0;
+    let hi = s.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      const goRight = side === "right" ? s[mid] <= q[i] : s[mid] < q[i];
+      if (goRight) lo = mid + 1;
+      else hi = mid;
+    }
+    out[i] = lo;
+  }
+  return out;
+}
+
 // TypedArray assignment performs the numeric conversion (matches WGSL for in-range values).
 export function cpuCast(input: NumericArray, toDtype: DataType): TypedArray {
   const arr = toTypedArray(input, inferDataType(input));

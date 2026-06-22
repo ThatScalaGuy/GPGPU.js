@@ -157,6 +157,28 @@ await gpu.scatter(bins, idx, ones, { mode: "add" });          // histogram-style
   compare-and-swap loop (see [docs/scatter.md](./docs/scatter.md)).
 - An out-of-range index clamps to the last element (the GPU can't throw).
 
+### Searchsorted
+
+Binary-search each query's insertion point into an **ascending** `sorted` array,
+one thread per query. NumPy-compatible. `sorted` and `queries` share the input
+dtype; the result is always a `Uint32Array` of length `queries.length`.
+
+```javascript
+// left (default): count of elements strictly < q
+await gpu.searchsorted([1, 3, 5, 7], [0, 1, 2, 3, 8]);                  // Uint32Array [0, 0, 1, 1, 4]
+
+// right: count of elements <= q
+await gpu.searchsorted([1, 3, 5, 7], [0, 1, 3, 8], { side: "right" }); // Uint32Array [0, 1, 2, 4]
+```
+
+- **`side: "left"`** (default) returns the leftmost insertion point — the count of
+  elements `< q`. **`side: "right"`** returns the rightmost — the count of
+  elements `<= q`. They differ only when `q` equals an element of `sorted`.
+- Out-of-range queries return `0` (below the minimum) or `sorted.length` (above
+  the maximum).
+- `sorted` **must** be ascending; results are undefined otherwise (not checked).
+  See [docs/searchsorted.md](./docs/searchsorted.md).
+
 ### Histogram
 
 Count values into `bins` equal-width buckets over `[min, max]`. Each element does

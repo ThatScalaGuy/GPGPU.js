@@ -86,6 +86,40 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// Per-query binary search for the insertion index into an ascending `sorted` array.
+// left (lower_bound): count of elements strictly < q. right (upper_bound): count of elements <= q.
+export function searchsortedShader(
+  elemType: DataType = "f32",
+  side: "left" | "right" = "left",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  const cmp = side === "right" ? "<=" : "<";
+  return `
+@group(0) @binding(0) var<storage, read> sorted: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> queries: array<${elemType}>;
+@group(0) @binding(2) var<storage, read_write> out: array<u32>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&queries)) { return; }
+  let q = queries[i];
+  var lo = 0u;
+  var hi = arrayLength(&sorted);
+  loop {
+    if (lo >= hi) { break; }
+    let mid = lo + (hi - lo) / 2u;
+    if (sorted[mid] ${cmp} q) {
+      lo = mid + 1u;
+    } else {
+      hi = mid;
+    }
+  }
+  out[i] = lo;
+}
+`;
+}
+
 // out[idx[i]] = vals[i]; one thread per idx element. Out-of-range indices clamp to the
 // last element (the GPU can't throw). DUPLICATE indices race — last write wins,
 // nondeterministically. Documented behaviour; use mode:"add" for deterministic accumulation.
