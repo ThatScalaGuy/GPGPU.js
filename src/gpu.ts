@@ -20,12 +20,14 @@ import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
+  cpuArgmin, cpuArgmax, cpuGather,
   cpuMatmul, cpuScan, cpuSort,
 } from "./fallback/cpu-ops";
 import {
   gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip,
 } from "./ops/elementwise";
-import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct } from "./ops/reduce";
+import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct, gpuArgmin, gpuArgmax } from "./ops/reduce";
+import { gpuGather } from "./ops/gather";
 import { gpuMatmul } from "./ops/matmul";
 import { gpuScan } from "./ops/scan";
 import { gpuSort } from "./ops/sort";
@@ -251,6 +253,47 @@ export class GPU {
       () => gpuProduct(this.deviceManager, this.bufferPool, this.shaderCache, input),
       () => cpuProduct(input as NumericArray),
       isGPUArray(input)
+    );
+  }
+
+  /** Index of the minimum element. Ties resolve to the first (smallest) index. */
+  argmin(input: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "argmin",
+      () => gpuArgmin(this.deviceManager, this.bufferPool, this.shaderCache, input),
+      () => cpuArgmin(input as NumericArray),
+      isGPUArray(input)
+    );
+  }
+
+  /** Index of the maximum element. Ties resolve to the first (smallest) index. */
+  argmax(input: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "argmax",
+      () => gpuArgmax(this.deviceManager, this.bufferPool, this.shaderCache, input),
+      () => cpuArgmax(input as NumericArray),
+      isGPUArray(input)
+    );
+  }
+
+  // --- Gather ---
+
+  gather(src: NumericArray, idx: NumericArray): Promise<TypedArray>;
+  gather(src: OpInput, idx: OpInput, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  gather(src: OpInput, idx: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  gather(
+    src: OpInput,
+    idx: OpInput,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(src) || isGPUArray(idx);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "gather",
+      (k) => gpuGather(this.deviceManager, this.bufferPool, this.shaderCache, src, idx, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuGather(src as NumericArray, idx as NumericArray),
+      hasGpu,
+      keep
     );
   }
 
