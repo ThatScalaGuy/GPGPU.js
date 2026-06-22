@@ -129,7 +129,8 @@ export async function gpuZip(
   const ir = parseExpression(fn, ["a", "b"]);
   const expression = emitWGSL(ir, dtype);
   const shader = zipShader(expression, dtype);
-  const pipeline = await shaderCache.getOrCreate(device, shader, `zip-${dtype}`);
+  const source = typeof fn === "string" ? fn : fn.toString();
+  const pipeline = await shaderCache.getOrCreate(device, shader, `zip-${dtype}`, source);
 
   const bufOut = createOutputBuffer(device, byteSize, bufferPool);
 
@@ -252,8 +253,9 @@ export async function gpuMap(
   const ir = parseExpression(fn, ["x", "i", "len"], constNames);
   const expression = emitWGSL(ir, dtype);
   const shader = mapShader(expression, dtype, resolvedConsts.map((c) => ({ name: c.name, dtype: c.dtype })));
+  const source = typeof fn === "string" ? fn : fn.toString();
   // The const names go in the cache key so kernels with different captures don't collide.
-  const pipeline = await shaderCache.getOrCreate(device, shader, `map-${dtype}-${constNames.join(",")}`);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `map-${dtype}-${constNames.join(",")}`, source);
 
   const bufOut = createOutputBuffer(device, byteSize, bufferPool);
 
