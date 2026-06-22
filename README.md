@@ -136,6 +136,28 @@ await gpu.scan(array)                          // default: addition
 await gpu.scan(array, (a, b) => a + b, 0)     // custom scan
 ```
 
+### Filter
+
+Keep the elements for which `predicate(x, i, len)` holds, in order. The result is
+shorter than (or equal to) the input — `filter` is the library's first
+variable-length-output op.
+
+```javascript
+await gpu.filter([1, 2, 3, 4, 5, 6], x => x > 3);   // [4, 5, 6]
+await gpu.filter([1, 2, 3, 4, 5, 6], "x % 2 == 0"); // [2, 4, 6]
+await gpu.filter(data, (x, i, len) => i < len / 2); // first half
+```
+
+- The predicate must be a **boolean** expression (`< > <= >= == != && ||`),
+  unlike `map`, whose function returns a **number**. Internally the expression is
+  wrapped in `select(0u, 1u, (<expr>))`, so a non-boolean expression is a WGSL
+  type error.
+- Order-preserving: kept elements stay in their original relative order, with
+  exact values (no floating-point reassociation). The output dtype follows the
+  input.
+- Built from a flags pass → prefix-sum scan → compaction, with **one small
+  GPU→CPU readback** to learn the result length (see [docs/filter.md](./docs/filter.md)).
+
 ### Scatter
 
 Write values into a copy of `dst` at the positions given by `idx` (the inverse of

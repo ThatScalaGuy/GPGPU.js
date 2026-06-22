@@ -10,3 +10,4 @@ export { gpuMatmul } from "./matmul";
 export { gpuScan } from "./scan";
 export { gpuSort } from "./sort";
 export { gpuSortByKey } from "./sort-by-key";
+export { gpuFilter } from "./filter";

@@ -21,7 +21,7 @@ import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
   cpuArgmin, cpuArgmax, cpuGather, cpuSearchsorted, cpuCast, cpuTranspose, cpuScatter, cpuHistogram,
-  cpuMatmul, cpuScan, cpuSort, cpuSortByKey,
+  cpuMatmul, cpuScan, cpuSort, cpuSortByKey, cpuFilter,
 } from "./fallback/cpu-ops";
 import {
   gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip,
@@ -37,6 +37,7 @@ import { gpuMatmul } from "./ops/matmul";
 import { gpuScan } from "./ops/scan";
 import { gpuSort } from "./ops/sort";
 import { gpuSortByKey } from "./ops/sort-by-key";
+import { gpuFilter } from "./ops/filter";
 import { Pipeline } from "./pipeline/pipeline";
 import { GPUArray } from "./pipeline/gpu-array";
 
@@ -206,6 +207,27 @@ export class GPU {
       "zip",
       (k) => gpuZip(this.deviceManager, this.bufferPool, this.shaderCache, a, b, fn, { keepOnGpu: k } as { keepOnGpu: true }),
       () => cpuZip(a as NumericArray, b as NumericArray, fn),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Filter (stream compaction) ---
+
+  filter(input: NumericArray, predicate: ((x: number, i: number, len: number) => boolean) | string): Promise<TypedArray>;
+  filter(input: OpInput, predicate: ((x: number, i: number, len: number) => boolean) | string, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  filter(input: OpInput, predicate: ((x: number, i: number, len: number) => boolean) | string, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  filter(
+    input: OpInput,
+    predicate: ((x: number, i: number, len: number) => boolean) | string,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "filter",
+      (k) => gpuFilter(this.deviceManager, this.bufferPool, this.shaderCache, input, predicate, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuFilter(input as NumericArray, predicate),
       hasGpu,
       keep
     );

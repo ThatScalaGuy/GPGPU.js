@@ -330,6 +330,27 @@ export function cpuScan(
   return result;
 }
 
+// Keep elements where predicate(x, i, len) is truthy, preserving order. Output dtype follows
+// input; length is the number of kept elements. Mirrors the GPU stream compaction.
+export function cpuFilter(
+  input: NumericArray,
+  predicate: ((x: number, i: number, len: number) => boolean) | string
+): TypedArray {
+  const dtype = inferDataType(input);
+  const arr = toTypedArray(input, dtype);
+  const pred =
+    typeof predicate === "string"
+      ? (new Function("x", "i", "len", `return ${predicate}`) as (x: number, i: number, len: number) => unknown)
+      : predicate;
+  const kept: number[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    if (pred(arr[i], i, arr.length)) kept.push(arr[i]);
+  }
+  const out = resultArray(dtype, kept.length);
+  out.set(kept);
+  return out;
+}
+
 export function cpuSort(input: NumericArray): TypedArray {
   const dtype = inferDataType(input);
   const result = toTypedArray(input, dtype).slice();

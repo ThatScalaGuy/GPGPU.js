@@ -86,6 +86,51 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// Writes 1u where the predicate holds, else 0u. `expression` is a WGSL BOOLEAN expression
+// produced by emitWGSL (e.g. "(x > 5.0)"); x, idx (as i/len builtins) are available like map.
+export function predicateFlagShader(
+  expression: string,
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> flags: array<u32>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&input)) { return; }
+  let x = input[idx];
+  flags[idx] = select(0u, 1u, (${expression}));
+}
+`;
+}
+
+// Stream compaction: each kept element (flags[idx]==1) writes itself to its compacted slot.
+// `scanned` is the INCLUSIVE prefix sum of flags, so a kept element's 0-based output index is
+// scanned[idx] - 1.
+export function compactShader(
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> flags: array<u32>;
+@group(0) @binding(2) var<storage, read> scanned: array<u32>;
+@group(0) @binding(3) var<storage, read_write> output: array<${elemType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&input)) { return; }
+  if (flags[idx] == 1u) {
+    output[scanned[idx] - 1u] = input[idx];
+  }
+}
+`;
+}
+
 // Per-query binary search for the insertion index into an ascending `sorted` array.
 // left (lower_bound): count of elements strictly < q. right (upper_bound): count of elements <= q.
 export function searchsortedShader(
