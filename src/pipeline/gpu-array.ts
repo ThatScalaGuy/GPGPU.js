@@ -6,8 +6,13 @@ export class GPUArray {
   readonly buffer: GPUBuffer;
   readonly length: number;
   readonly dtype: DataType;
+  /** Optional logical shape (e.g. `[rows, cols]`). `undefined` = treat as 1-D by length. */
+  readonly shape?: readonly number[];
   private device: GPUDevice;
   private pool: BufferPool;
+  // Whether this handle owns its buffer. A non-owning view (e.g. from `reshape`) borrows
+  // the source array's buffer and must NOT release it on destroy.
+  private owns: boolean;
   private destroyed = false;
 
   constructor(
@@ -15,13 +20,16 @@ export class GPUArray {
     length: number,
     dtype: DataType,
     device: GPUDevice,
-    pool: BufferPool
+    pool: BufferPool,
+    opts?: { shape?: readonly number[]; owns?: boolean }
   ) {
     this.buffer = buffer;
     this.length = length;
     this.dtype = dtype;
     this.device = device;
     this.pool = pool;
+    this.shape = opts?.shape;
+    this.owns = opts?.owns ?? true;
   }
 
   get byteLength(): number {
@@ -55,7 +63,7 @@ export class GPUArray {
 
   destroy(): void {
     if (!this.destroyed) {
-      this.pool.release(this.buffer);
+      if (this.owns) this.pool.release(this.buffer);
       this.destroyed = true;
     }
   }
