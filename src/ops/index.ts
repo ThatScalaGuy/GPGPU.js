@@ -11,3 +11,8 @@ export { gpuScan } from "./scan";
 export { gpuSort } from "./sort";
 export { gpuSortByKey } from "./sort-by-key";
 export { gpuFilter } from "./filter";
+export { gpuUnique } from "./unique";
+export { gpuSegmentedReduce } from "./segmented-reduce";
+export { gpuRandom } from "./random";
+export { gpuFft } from "./fft";
+export { gpuConvolve } from "./convolve";

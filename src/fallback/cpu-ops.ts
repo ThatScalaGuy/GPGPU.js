@@ -9,68 +9,61 @@ function resultArray(dtype: DataType, len: number): TypedArray {
   return new Float32Array(len);
 }
 
-export function cpuAdd(
+// Elementwise binary over two flat CPU arrays with 1-D NumPy broadcasting: equal lengths pair
+// up; otherwise one side must be length 1 and is broadcast against the other. The result takes
+// the longer length and operand `a`'s dtype (matching the GPU path). The GPU path handles
+// higher-rank broadcasting via reshaped GPUArrays; a bare CPU array is always 1-D here.
+function broadcastBinary(
   a: NumericArray,
-  b: NumericArray | number
+  b: NumericArray,
+  op: (x: number, y: number) => number
 ): TypedArray {
   const dtype = inferDataType(a);
   const arrA = toTypedArray(a, dtype);
-  const result = resultArray(dtype, arrA.length);
-  if (typeof b === "number") {
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] + b;
-  } else {
-    const arrB = toTypedArray(b, dtype);
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] + arrB[i];
+  const arrB = toTypedArray(b, dtype);
+  if (arrA.length !== arrB.length && arrA.length !== 1 && arrB.length !== 1) {
+    throw new Error(
+      `Cannot broadcast lengths ${arrA.length} and ${arrB.length}: one operand must have length 1`
+    );
+  }
+  const n = Math.max(arrA.length, arrB.length);
+  const result = resultArray(dtype, n);
+  for (let i = 0; i < n; i++) {
+    result[i] = op(arrA[arrA.length === 1 ? 0 : i], arrB[arrB.length === 1 ? 0 : i]);
   }
   return result;
 }
 
-export function cpuSubtract(
+// Scalar fast path (b is a number); else elementwise with 1-D broadcasting.
+function cpuBinary(
   a: NumericArray,
-  b: NumericArray | number
+  b: NumericArray | number,
+  op: (x: number, y: number) => number
 ): TypedArray {
-  const dtype = inferDataType(a);
-  const arrA = toTypedArray(a, dtype);
-  const result = resultArray(dtype, arrA.length);
   if (typeof b === "number") {
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] - b;
-  } else {
-    const arrB = toTypedArray(b, dtype);
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] - arrB[i];
+    const dtype = inferDataType(a);
+    const arrA = toTypedArray(a, dtype);
+    const result = resultArray(dtype, arrA.length);
+    for (let i = 0; i < arrA.length; i++) result[i] = op(arrA[i], b);
+    return result;
   }
-  return result;
+  return broadcastBinary(a, b, op);
 }
 
-export function cpuMultiply(
-  a: NumericArray,
-  b: NumericArray | number
-): TypedArray {
-  const dtype = inferDataType(a);
-  const arrA = toTypedArray(a, dtype);
-  const result = resultArray(dtype, arrA.length);
-  if (typeof b === "number") {
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] * b;
-  } else {
-    const arrB = toTypedArray(b, dtype);
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] * arrB[i];
-  }
-  return result;
+export function cpuAdd(a: NumericArray, b: NumericArray | number): TypedArray {
+  return cpuBinary(a, b, (x, y) => x + y);
 }
 
-export function cpuDivide(
-  a: NumericArray,
-  b: NumericArray | number
-): TypedArray {
-  const dtype = inferDataType(a);
-  const arrA = toTypedArray(a, dtype);
-  const result = resultArray(dtype, arrA.length);
-  if (typeof b === "number") {
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] / b;
-  } else {
-    const arrB = toTypedArray(b, dtype);
-    for (let i = 0; i < arrA.length; i++) result[i] = arrA[i] / arrB[i];
-  }
-  return result;
+export function cpuSubtract(a: NumericArray, b: NumericArray | number): TypedArray {
+  return cpuBinary(a, b, (x, y) => x - y);
+}
+
+export function cpuMultiply(a: NumericArray, b: NumericArray | number): TypedArray {
+  return cpuBinary(a, b, (x, y) => x * y);
+}
+
+export function cpuDivide(a: NumericArray, b: NumericArray | number): TypedArray {
+  return cpuBinary(a, b, (x, y) => x / y);
 }
 
 export function cpuMap(
@@ -103,18 +96,13 @@ export function cpuZip(
   b: NumericArray,
   fn: ((a: number, b: number) => number) | string
 ): TypedArray {
-  const dtype = inferDataType(a);
-  const arrA = toTypedArray(a, dtype);
-  const arrB = toTypedArray(b, dtype);
-  const result = resultArray(dtype, arrA.length);
   const zipFn =
     typeof fn === "string"
       ? (new Function("a", "b", `return ${fn}`) as (a: number, b: number) => number)
       : fn;
-  for (let i = 0; i < arrA.length; i++) {
-    result[i] = zipFn(arrA[i], arrB[i]);
-  }
-  return result;
+  // Same 1-D broadcasting as the elementwise ops: equal lengths pair up; otherwise one side
+  // must be length 1 and is broadcast.
+  return broadcastBinary(a, b, zipFn);
 }
 
 export function cpuReduce(
@@ -380,3 +368,9 @@ export function cpuSortByKey(
   }
   return [outK, outV];
 }
+
+export { cpuUnique } from "../ops/unique";
+export { cpuSegmentedReduce } from "../ops/segmented-reduce";
+export { cpuRandom } from "../ops/random";
+export { cpuFft } from "../ops/fft";
+export { cpuConvolve } from "../ops/convolve";

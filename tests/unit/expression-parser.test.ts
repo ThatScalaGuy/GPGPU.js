@@ -211,6 +211,14 @@ describe("Expression Parser + WGSL Emitter", () => {
     it("rejects unsupported Math functions", () => {
       expect(() => parse("Math.random()", ["x"])).toThrow("Unsupported Math function");
     });
+
+    it("rejects Math functions called with the wrong arity", () => {
+      // WGSL min/max/abs/clamp have fixed arities; catch a typo'd reducer at parse time
+      // instead of letting invalid WGSL fail later in pipeline creation.
+      expect(() => parse("Math.min(a)", ["a", "b"])).toThrow("Math.min expects 2 arguments, got 1");
+      expect(() => parse("Math.abs(a, b)", ["a", "b"])).toThrow("Math.abs expects 1 argument, got 2");
+      expect(() => parse("Math.clamp(a, b)", ["a", "b"])).toThrow("Math.clamp expects 3 arguments, got 2");
+    });
   });
 
   describe("typed literal formatting", () => {
