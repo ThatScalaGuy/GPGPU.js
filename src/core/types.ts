@@ -23,6 +23,10 @@ export interface MatMulOpts {
   colsB: number;
 }
 
+export interface ScatterOpts {
+  mode?: "set" | "add";
+}
+
 /** Which backend actually executed an op. */
 export type Backend = "gpu" | "cpu";
 

@@ -7,6 +7,7 @@ export type {
   TypedArray,
   KernelConfig,
   MatMulOpts,
+  ScatterOpts,
   BufferSpec,
   Backend,
   OpStats,

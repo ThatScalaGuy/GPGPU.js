@@ -120,6 +120,27 @@ await gpu.scan(array)                          // default: addition
 await gpu.scan(array, (a, b) => a + b, 0)     // custom scan
 ```
 
+### Scatter
+
+Write values into a copy of `dst` at the positions given by `idx` (the inverse of
+a gather). `idx` is read as `u32`; the output dtype follows `dst`.
+
+```javascript
+// set (default): out[idx[i]] = vals[i]
+await gpu.scatter([0, 0, 0, 0], [3, 1], [9, 5]);              // [0, 5, 0, 9]
+
+// add: out[idx[i]] += vals[i], atomically
+await gpu.scatter(bins, idx, ones, { mode: "add" });          // histogram-style accumulation
+```
+
+- **`set`** (default) overwrites. On **duplicate** indices the writes race and the
+  surviving value is nondeterministic — use `set` only for duplicate-free indices
+  (e.g. a permutation).
+- **`add`** accumulates atomically, so duplicates are summed exactly and the result
+  is deterministic. Integer add uses native atomics; `f32` add uses a portable
+  compare-and-swap loop (see [docs/scatter.md](./docs/scatter.md)).
+- An out-of-range index clamps to the last element (the GPU can't throw).
+
 ### Pipeline
 
 Chain operations to keep data on the GPU between steps:
