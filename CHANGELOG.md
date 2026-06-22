@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-22
+
+A large batch of new operations (Tiers 1–3), a Node runtime via Google Dawn,
+NumPy-style broadcasting, and clearer shader-compile diagnostics. Every new op
+ships with real-GPU tests (Dawn) and CPU-fallback unit tests plus docs.
+
+### Added
+
+- **New operations:**
+  - `argmin` / `argmax` — index of the minimum/maximum via an index-carrying
+    multi-block reduction (first-occurrence tie-break).
+  - `gather(src, idx)` — `output[k] = src[idx[k]]`; output dtype follows `src`,
+    out-of-range indices are clamped to the last element.
+  - `scatter(dst, idx, vals)` — scatter writes backed by GPU atomics, with `set`
+    and `add` modes.
+  - `histogram` — `atomic<u32>` bin counts.
+  - `sortByKey(keys, values)` — bitonic sort of a key array carrying a parallel
+    value array.
+  - `cast`, `transpose`, `reshape` — shape ops, with optional shape metadata on
+    `GPUArray`.
+  - `searchsorted(sorted, queries)` — per-query binary search (`left` / `right`).
+  - `filter` — stream compaction (predicate → scan → compact).
+  - `unique` — sorted distinct values (sort → adjacent-diff → scan → compact).
+  - `segmentedReduce(values, segmentIds)` — group-by reductions over segment ids.
+  - `random(n)` — counter-based Philox-4×32-10 RNG; deterministic, and bit-for-bit
+    reproducible between the GPU and CPU paths for `u32`.
+  - `convolve(input, kernel)` — 1-D convolution with NumPy `full` / `same` /
+    `valid` modes (true convolution; the kernel is reversed).
+  - `fft` — radix-2 Cooley–Tukey forward and inverse transforms; complex values
+    carried as interleaved `vec2<f32>`.
+  - `zip(a, b, fn)` — combine two arrays element-wise with a custom expression.
+- **NumPy-style broadcasting** for `add` / `subtract` / `multiply` / `divide` /
+  `zip`, built on `GPUArray` shapes.
+- **Index-aware `map`** — the mapping function can take the element index, and
+  capture constants from the surrounding scope.
+- **Node runtime via Google Dawn.** Under Node, the device manager lazily
+  dynamic-imports the optional `webgpu` peer dependency so the same API runs
+  headless; it is kept out of the browser bundle (tsup external + optional peer
+  dependency).
+
+### Changed
+
+- WGSL compile errors are now framed with the generated shader source, plus a
+  note tying the error back to the originating JS expression when the shader was
+  generated from one.
+- Code generation validates `Math.*` call arity for the general `scan` / `reduce`
+  operator.
+
+### Tests
+
+- Real-GPU test suites running on Google Dawn for the new ops, plus a dedicated
+  CI `gpu` job that runs them headless via a software Vulkan driver (Mesa
+  lavapipe).
+
+## [0.2.0] - 2026-05-26
+
 ### Added
 
 - **`GPUArray` as a first-class input/output type.** Ops now accept
@@ -123,5 +179,8 @@ Int32Array | Uint32Array`; reductions still return `number`.
 - Custom WGSL kernels via `createKernel`.
 - Automatic CPU fallback when WebGPU is unavailable.
 
-[Unreleased]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.1.5...v0.2.0
+[0.1.5]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.1.0...v0.1.5
 [0.1.0]: https://github.com/ThatScalaGuy/GPGPU.js/releases/tag/v0.1.0
