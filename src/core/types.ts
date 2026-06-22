@@ -27,6 +27,10 @@ export interface ScatterOpts {
   mode?: "set" | "add";
 }
 
+export interface SearchSortedOpts {
+  side?: "left" | "right";
+}
+
 export interface HistogramOpts {
   bins: number;
   min: number;

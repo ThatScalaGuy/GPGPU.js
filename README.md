@@ -136,6 +136,28 @@ await gpu.scan(array)                          // default: addition
 await gpu.scan(array, (a, b) => a + b, 0)     // custom scan
 ```
 
+### Filter
+
+Keep the elements for which `predicate(x, i, len)` holds, in order. The result is
+shorter than (or equal to) the input — `filter` is the library's first
+variable-length-output op.
+
+```javascript
+await gpu.filter([1, 2, 3, 4, 5, 6], x => x > 3);   // [4, 5, 6]
+await gpu.filter([1, 2, 3, 4, 5, 6], "x % 2 == 0"); // [2, 4, 6]
+await gpu.filter(data, (x, i, len) => i < len / 2); // first half
+```
+
+- The predicate must be a **boolean** expression (`< > <= >= == != && ||`),
+  unlike `map`, whose function returns a **number**. Internally the expression is
+  wrapped in `select(0u, 1u, (<expr>))`, so a non-boolean expression is a WGSL
+  type error.
+- Order-preserving: kept elements stay in their original relative order, with
+  exact values (no floating-point reassociation). The output dtype follows the
+  input.
+- Built from a flags pass → prefix-sum scan → compaction, with **one small
+  GPU→CPU readback** to learn the result length (see [docs/filter.md](./docs/filter.md)).
+
 ### Scatter
 
 Write values into a copy of `dst` at the positions given by `idx` (the inverse of
@@ -156,6 +178,28 @@ await gpu.scatter(bins, idx, ones, { mode: "add" });          // histogram-style
   is deterministic. Integer add uses native atomics; `f32` add uses a portable
   compare-and-swap loop (see [docs/scatter.md](./docs/scatter.md)).
 - An out-of-range index clamps to the last element (the GPU can't throw).
+
+### Searchsorted
+
+Binary-search each query's insertion point into an **ascending** `sorted` array,
+one thread per query. NumPy-compatible. `sorted` and `queries` share the input
+dtype; the result is always a `Uint32Array` of length `queries.length`.
+
+```javascript
+// left (default): count of elements strictly < q
+await gpu.searchsorted([1, 3, 5, 7], [0, 1, 2, 3, 8]);                  // Uint32Array [0, 0, 1, 1, 4]
+
+// right: count of elements <= q
+await gpu.searchsorted([1, 3, 5, 7], [0, 1, 3, 8], { side: "right" }); // Uint32Array [0, 1, 2, 4]
+```
+
+- **`side: "left"`** (default) returns the leftmost insertion point — the count of
+  elements `< q`. **`side: "right"`** returns the rightmost — the count of
+  elements `<= q`. They differ only when `q` equals an element of `sorted`.
+- Out-of-range queries return `0` (below the minimum) or `sorted.length` (above
+  the maximum).
+- `sorted` **must** be ascending; results are undefined otherwise (not checked).
+  See [docs/searchsorted.md](./docs/searchsorted.md).
 
 ### Histogram
 
@@ -355,6 +399,10 @@ gpu.fallback = "silent";
 5. **Results returned as Float32Array** — ready to use
 
 The library manages GPU device initialization, buffer pooling, shader caching, and data transfer automatically.
+
+## Troubleshooting
+
+When a shader fails to compile, the thrown error includes a code frame of the generated WGSL (with a caret under the failing column) and, for codegen ops, a `from expression:` note echoing your JS. See [docs/debugging.md](./docs/debugging.md).
 
 ## Numerical Precision
 
