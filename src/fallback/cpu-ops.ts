@@ -216,6 +216,28 @@ export function cpuScatter(
   return out;
 }
 
+// Mirror of the GPU histogram: equal-width bins over [min,max], out-of-range clamps to the
+// edge bins, max==min puts everything in bin 0. Returns u32 counts.
+export function cpuHistogram(
+  input: NumericArray,
+  bins: number,
+  min: number,
+  max: number
+): Uint32Array {
+  const arr = toTypedArray(input, inferDataType(input));
+  const out = new Uint32Array(bins);
+  const range = max - min;
+  for (let i = 0; i < arr.length; i++) {
+    let b = 0;
+    if (range > 0) {
+      const f = ((arr[i] - min) / range) * bins;
+      if (f >= 0) b = Math.min(Math.floor(f), bins - 1);
+    }
+    out[b]++;
+  }
+  return out;
+}
+
 export function cpuMatmul(
   a: NumericArray,
   b: NumericArray,

@@ -27,6 +27,12 @@ export interface ScatterOpts {
   mode?: "set" | "add";
 }
 
+export interface HistogramOpts {
+  bins: number;
+  min: number;
+  max: number;
+}
+
 /** Which backend actually executed an op. */
 export type Backend = "gpu" | "cpu";
 

@@ -1,5 +1,5 @@
 import type {
-  NumericArray, TypedArray, MatMulOpts, ScatterOpts, KernelConfig,
+  NumericArray, TypedArray, MatMulOpts, ScatterOpts, HistogramOpts, KernelConfig,
   FallbackInfo, FallbackMode, GPUOptions, OpStats,
 } from "./core/types";
 import { inferDataType } from "./core/types";
@@ -20,7 +20,7 @@ import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
-  cpuArgmin, cpuArgmax, cpuGather, cpuScatter,
+  cpuArgmin, cpuArgmax, cpuGather, cpuScatter, cpuHistogram,
   cpuMatmul, cpuScan, cpuSort,
 } from "./fallback/cpu-ops";
 import {
@@ -29,6 +29,7 @@ import {
 import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct, gpuArgmin, gpuArgmax } from "./ops/reduce";
 import { gpuGather } from "./ops/gather";
 import { gpuScatter } from "./ops/scatter";
+import { gpuHistogram } from "./ops/histogram";
 import { gpuMatmul } from "./ops/matmul";
 import { gpuScan } from "./ops/scan";
 import { gpuSort } from "./ops/sort";
@@ -315,6 +316,26 @@ export class GPU {
       "scatter",
       (k) => gpuScatter(this.deviceManager, this.bufferPool, this.shaderCache, dst, idx, vals, { ...opts, keepOnGpu: k } as ScatterOpts & { keepOnGpu: true }),
       () => cpuScatter(dst as NumericArray, idx as NumericArray, vals as NumericArray, opts?.mode),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Histogram ---
+
+  histogram(input: NumericArray, opts: HistogramOpts): Promise<Uint32Array>;
+  histogram(input: OpInput, opts: HistogramOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  histogram(input: OpInput, opts: HistogramOpts & OpOptions): Promise<TypedArray | GPUArray>;
+  histogram(
+    input: OpInput,
+    opts: HistogramOpts & OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "histogram",
+      (k) => gpuHistogram(this.deviceManager, this.bufferPool, this.shaderCache, input, { ...opts, keepOnGpu: k }),
+      () => cpuHistogram(input as NumericArray, opts.bins, opts.min, opts.max),
       hasGpu,
       keep
     );

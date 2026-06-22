@@ -141,6 +141,23 @@ await gpu.scatter(bins, idx, ones, { mode: "add" });          // histogram-style
   compare-and-swap loop (see [docs/scatter.md](./docs/scatter.md)).
 - An out-of-range index clamps to the last element (the GPU can't throw).
 
+### Histogram
+
+Count values into `bins` equal-width buckets over `[min, max]`. Each element does
+one atomic increment, so counts are exact. The result is always a `Uint32Array`
+of length `bins`, whatever the input dtype.
+
+```javascript
+await gpu.histogram([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], { bins: 5, min: 0, max: 10 });
+// Uint32Array [2, 2, 2, 2, 2]
+```
+
+- The bin is `floor((x - min) / (max - min) * bins)`, clamped into `[0, bins-1]`.
+- **Out-of-range values clamp to the edge bins** — they are *not* dropped (unlike
+  NumPy). `x == max` lands in the last bin; `max == min` puts everything in bin 0.
+- Binning casts the input to `f32`, so `i32`/`u32` inputs work too (see
+  [docs/histogram.md](./docs/histogram.md)).
+
 ### Pipeline
 
 Chain operations to keep data on the GPU between steps:
