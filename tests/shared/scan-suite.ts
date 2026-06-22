@@ -3,6 +3,7 @@ import { gpuScan } from "../../src/ops/scan";
 import { DeviceManager } from "../../src/core/device";
 import { BufferPool } from "../../src/core/buffer-pool";
 import { ShaderCache } from "../../src/core/shader-cache";
+import { expectClose } from "./tolerance";
 import type { NumericArray } from "../../src/core/types";
 
 // A large, safely f32-representable negative number to seed a max-scan (WGSL has no -Infinity literal).
@@ -75,7 +76,7 @@ export async function registerScanSuite(): Promise<void> {
 
       for (let i = 0; i < n; i++) {
         // f32 GPU vs f64 reference, with tree-reassociated accumulation.
-        expect(Math.abs(out[i] - expected[i])).toBeLessThan(0.05);
+        expectClose(out[i], expected[i]);
       }
     });
 
