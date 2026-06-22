@@ -22,6 +22,7 @@ import {
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
   cpuArgmin, cpuArgmax, cpuGather, cpuSearchsorted, cpuCast, cpuTranspose, cpuScatter, cpuHistogram,
   cpuMatmul, cpuScan, cpuSort, cpuSortByKey, cpuFilter,
+  cpuUnique, cpuSegmentedReduce, cpuRandom, cpuFft, cpuConvolve,
 } from "./fallback/cpu-ops";
 import {
   gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip,
@@ -38,6 +39,14 @@ import { gpuScan } from "./ops/scan";
 import { gpuSort } from "./ops/sort";
 import { gpuSortByKey } from "./ops/sort-by-key";
 import { gpuFilter } from "./ops/filter";
+import { gpuUnique } from "./ops/unique";
+import { gpuSegmentedReduce } from "./ops/segmented-reduce";
+import type { SegmentedReduceOpts } from "./ops/segmented-reduce";
+import { gpuRandom } from "./ops/random";
+import type { RandomOpts } from "./ops/random";
+import { gpuFft } from "./ops/fft";
+import { gpuConvolve } from "./ops/convolve";
+import type { ConvolveOpts } from "./ops/convolve";
 import { Pipeline } from "./pipeline/pipeline";
 import { GPUArray } from "./pipeline/gpu-array";
 
@@ -531,6 +540,106 @@ export class GPU {
       () => gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values),
       () => cpuSortByKey(keys as NumericArray, values as NumericArray),
       this.fallbackConfig()
+    );
+  }
+
+  // --- Unique (sorted distinct values) ---
+
+  unique(input: NumericArray): Promise<TypedArray>;
+  unique(input: OpInput, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  unique(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  unique(
+    input: OpInput,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "unique",
+      (k) => gpuUnique(this.deviceManager, this.bufferPool, this.shaderCache, input, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuUnique(input as NumericArray),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Segmented reduce (group-by) ---
+
+  segmentedReduce(values: NumericArray, segmentIds: NumericArray, opts: SegmentedReduceOpts): Promise<TypedArray>;
+  segmentedReduce(values: OpInput, segmentIds: OpInput, opts: SegmentedReduceOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  segmentedReduce(values: OpInput, segmentIds: OpInput, opts: SegmentedReduceOpts & OpOptions): Promise<TypedArray | GPUArray>;
+  segmentedReduce(
+    values: OpInput,
+    segmentIds: OpInput,
+    opts: SegmentedReduceOpts & OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(values) || isGPUArray(segmentIds);
+    const keep = opts.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "segmentedReduce",
+      (k) => gpuSegmentedReduce(this.deviceManager, this.bufferPool, this.shaderCache, values, segmentIds, { ...opts, keepOnGpu: k } as SegmentedReduceOpts & { keepOnGpu: true }),
+      () => cpuSegmentedReduce(values as NumericArray, segmentIds as NumericArray, opts),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Random (counter-based generator) ---
+
+  random(n: number, opts?: RandomOpts): Promise<TypedArray>;
+  random(n: number, opts: RandomOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  random(n: number, opts?: RandomOpts): Promise<TypedArray | GPUArray>;
+  random(n: number, opts?: RandomOpts): Promise<TypedArray | GPUArray> {
+    // Generator: no array input, so the GPU path is never forced by an input. keepOnGpu still
+    // forces it; otherwise withFallback runs the GPU op first and cpuRandom on failure.
+    const keep = opts?.keepOnGpu ?? false;
+    return this.runArrayOp(
+      "random",
+      (k) => gpuRandom(this.deviceManager, this.bufferPool, this.shaderCache, n, { ...opts, keepOnGpu: k } as RandomOpts & { keepOnGpu: true }),
+      () => cpuRandom(n, opts),
+      false,
+      keep
+    );
+  }
+
+  // --- FFT (forward, real input -> interleaved complex spectrum) ---
+
+  fft(input: NumericArray): Promise<TypedArray>;
+  fft(input: OpInput, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  fft(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  fft(
+    input: OpInput,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "fft",
+      (k) => gpuFft(this.deviceManager, this.bufferPool, this.shaderCache, input, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuFft(input as NumericArray),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Convolution (1-D, numpy.convolve modes) ---
+
+  convolve(input: NumericArray, kernel: NumericArray, opts?: ConvolveOpts): Promise<TypedArray>;
+  convolve(input: OpInput, kernel: OpInput, opts: ConvolveOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  convolve(input: OpInput, kernel: OpInput, opts?: ConvolveOpts): Promise<TypedArray | GPUArray>;
+  convolve(
+    input: OpInput,
+    kernel: OpInput,
+    opts?: ConvolveOpts
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input) || isGPUArray(kernel);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "convolve",
+      (k) => gpuConvolve(this.deviceManager, this.bufferPool, this.shaderCache, input, kernel, { ...opts, keepOnGpu: k } as ConvolveOpts & { keepOnGpu: true }),
+      () => cpuConvolve(input as NumericArray, kernel as NumericArray, opts?.mode),
+      hasGpu,
+      keep
     );
   }
 

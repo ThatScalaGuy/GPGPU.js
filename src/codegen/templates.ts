@@ -66,6 +66,61 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// NumPy-style broadcast of two operands of different shape. The uniform carries the padded
+// output shape and each operand's per-dim strides (a size-1/missing dim → stride 0, so its
+// coordinate folds away). One thread per OUTPUT element: unravel the flat output index into
+// coordinates, then dot each operand's strides with the coordinates to find the element to read.
+// The two element values are bound as locals `a` and `b`, so `combine` is "a OP b" for a fixed
+// operator, or an emitWGSL expression over a/b for zip.
+export function broadcastBinaryShader(
+  combine: string,
+  elemType: DataType = "f32",
+  rank = 4,
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  const vecCount = Math.ceil(rank / 4);
+  return `
+struct Params {
+  outShape: array<vec4<u32>, ${vecCount}>,
+  strideA: array<vec4<u32>, ${vecCount}>,
+  strideB: array<vec4<u32>, ${vecCount}>,
+  total: u32,
+}
+
+@group(0) @binding(0) var<storage, read> a_in: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> b_in: array<${elemType}>;
+@group(0) @binding(2) var<storage, read_write> output: array<${elemType}>;
+@group(0) @binding(3) var<uniform> params: Params;
+
+fn shapeAt(i: u32) -> u32 { return params.outShape[i / 4u][i % 4u]; }
+fn strideAAt(i: u32) -> u32 { return params.strideA[i / 4u][i % 4u]; }
+fn strideBAt(i: u32) -> u32 { return params.strideB[i / 4u][i % 4u]; }
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= params.total) { return; }
+
+  // Unravel idx into per-dim coordinates (row-major: last dim is fastest), accumulating each
+  // operand's read offset as we go.
+  var rem = idx;
+  var offA = 0u;
+  var offB = 0u;
+  for (var d = ${rank}u; d > 0u; d = d - 1u) {
+    let dim = shapeAt(d - 1u);
+    let coord = rem % dim;
+    rem = rem / dim;
+    offA = offA + coord * strideAAt(d - 1u);
+    offB = offB + coord * strideBAt(d - 1u);
+  }
+
+  let a = a_in[offA];
+  let b = b_in[offB];
+  output[idx] = ${combine};
+}
+`;
+}
+
 // output[k] = src[idx[k]]; one thread per idx element. An out-of-range index is clamped
 // to the last src element — the GPU can't throw, so this avoids an out-of-bounds read.
 export function gatherShader(

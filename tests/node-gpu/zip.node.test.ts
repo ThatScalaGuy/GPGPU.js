@@ -39,11 +39,12 @@ describe("zip (real GPU)", () => {
     expect(Array.from(out)).toEqual([11, 22, 33]);
   });
 
-  it("throws on a length mismatch between two GPUArray inputs", async () => {
+  it("throws on incompatible (non-broadcastable) lengths between two GPUArray inputs", async () => {
     const device = await deviceManager.getDevice();
+    // [3] vs [2]: different lengths, neither broadcastable → a broadcast-shape error.
     const a = gpuArrayFrom(device, new Float32Array([1, 2, 3]), "f32");
     const b = gpuArrayFrom(device, new Float32Array([1, 2]), "f32");
-    await expect(gpuZip(...args, a, b, (x, y) => x + y)).rejects.toThrow("same length");
+    await expect(gpuZip(...args, a, b, (x, y) => x + y)).rejects.toThrow(/[Cc]annot broadcast/);
     a.destroy();
     b.destroy();
   });

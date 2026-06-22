@@ -1,11 +1,14 @@
 import type { IRNode, Token, TokenType } from "./types";
 
-const MATH_FUNCTIONS = new Set([
-  "abs", "sqrt", "pow", "min", "max",
-  "floor", "ceil", "round",
-  "sin", "cos", "tan",
-  "exp", "log", "sign", "clamp",
-]);
+// Supported Math.* functions and the exact argument count WGSL requires for each. Checking
+// arity at parse time turns a typo'd reducer (e.g. `Math.min(a)`) into a clear error naming
+// the function, instead of invalid WGSL that fails opaquely during pipeline creation.
+const MATH_FUNCTIONS: Record<string, number> = {
+  abs: 1, sqrt: 1, pow: 2, min: 2, max: 2,
+  floor: 1, ceil: 1, round: 1,
+  sin: 1, cos: 1, tan: 1,
+  exp: 1, log: 1, sign: 1, clamp: 3,
+};
 
 const OP_CHARS = new Set(["+", "-", "*", "/", "%", "<", ">", "=", "!", "&", "|", "^", "~"]);
 const MULTI_CHAR_OPS = new Set(["<=", ">=", "==", "!=", "===", "!==", "&&", "||", "<<", ">>"]);
@@ -327,14 +330,20 @@ class Parser {
       if (tok.value === "Math" && this.peek().type === "dot") {
         this.advance(); // consume dot
         const fnTok = this.expect("ident");
-        if (!MATH_FUNCTIONS.has(fnTok.value)) {
+        const arity = MATH_FUNCTIONS[fnTok.value];
+        if (arity === undefined) {
           throw new Error(
-            `Unsupported Math function 'Math.${fnTok.value}'. Supported: ${[...MATH_FUNCTIONS].join(", ")}`
+            `Unsupported Math function 'Math.${fnTok.value}'. Supported: ${Object.keys(MATH_FUNCTIONS).join(", ")}`
           );
         }
         this.expect("paren", "(");
         const args = this.parseArgList();
         this.expect("paren", ")");
+        if (args.length !== arity) {
+          throw new Error(
+            `Math.${fnTok.value} expects ${arity} argument${arity === 1 ? "" : "s"}, got ${args.length}`
+          );
+        }
         return { kind: "call", fn: fnTok.value, args };
       }
 

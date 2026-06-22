@@ -112,10 +112,11 @@ describe("GPUArray input/output (real GPU)", () => {
     plus10.destroy();
   });
 
-  it("throws on mismatched length / dtype for two GPUArray inputs", async () => {
+  it("throws on incompatible length / mismatched dtype for two GPUArray inputs", async () => {
     const a = await gpu.upload([1, 2, 3]);
     const b = await gpu.upload([1, 2]);
-    await expect(gpu.add(a, b)).rejects.toThrow(/same length/);
+    // Unshaped arrays read as 1-D [3] and [2]: different and non-broadcastable.
+    await expect(gpu.add(a, b)).rejects.toThrow(/[Cc]annot broadcast/);
 
     const i = await gpu.upload(new Int32Array([1, 2, 3]));
     await expect(gpu.add(a, i)).rejects.toThrow(/data type/);

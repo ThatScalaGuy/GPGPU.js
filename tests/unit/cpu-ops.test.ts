@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
-  cpuMap, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
+  cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
   cpuMatmul, cpuScan, cpuSort,
 } from "../../src/fallback/cpu-ops";
 
@@ -164,6 +164,36 @@ describe("CPU Fallback Operations", () => {
       const result = cpuSort(new Int32Array([10, 2, 33, 4]));
       expect(result).toBeInstanceOf(Int32Array);
       expect(Array.from(result)).toEqual([2, 4, 10, 33]);
+    });
+  });
+
+  describe("broadcasting (1-D)", () => {
+    it("broadcasts a length-1 array against a vector (b is the scalar)", () => {
+      expect(Array.from(cpuAdd([1, 2, 3, 4], [10]))).toEqual([11, 12, 13, 14]);
+    });
+
+    it("broadcasts a length-1 array against a vector (a is the scalar)", () => {
+      expect(Array.from(cpuSubtract([100], [1, 2, 3]))).toEqual([99, 98, 97]);
+    });
+
+    it("broadcasts across multiply and divide", () => {
+      expect(Array.from(cpuMultiply([1, 2, 3], [10]))).toEqual([10, 20, 30]);
+      expect(Array.from(cpuDivide([10, 20, 30], [10]))).toEqual([1, 2, 3]);
+    });
+
+    it("cpuZip broadcasts a length-1 operand", () => {
+      expect(Array.from(cpuZip([1, 2, 3], [10], (a, b) => a + b))).toEqual([11, 12, 13]);
+    });
+
+    it("preserves dtype when broadcasting", () => {
+      const r = cpuAdd(new Int32Array([1, 2, 3]), new Int32Array([5]));
+      expect(r).toBeInstanceOf(Int32Array);
+      expect(Array.from(r)).toEqual([6, 7, 8]);
+    });
+
+    it("throws when neither length is 1 and they differ", () => {
+      expect(() => cpuAdd([1, 2, 3], [1, 2])).toThrow(/[Cc]annot broadcast/);
+      expect(() => cpuZip([1, 2, 3], [1, 2], (a, b) => a + b)).toThrow(/[Cc]annot broadcast/);
     });
   });
 

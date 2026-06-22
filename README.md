@@ -73,6 +73,20 @@ await gpu.multiply(a, b)   // a * b
 await gpu.divide(a, b)     // a / b
 ```
 
+**Broadcasting.** When two operands have different shapes, `add`/`subtract`/
+`multiply`/`divide` (and `zip`) apply [NumPy broadcasting](./docs/broadcasting.md):
+shapes align from the trailing dimension, and a dimension of size 1 stretches to
+match. Shapes come from [`reshape`](#reshape); an unshaped array is read as 1-D.
+
+```javascript
+const mat = await gpu.reshape([1, 2, 3, 4, 5, 6], [2, 3]); // shape [2, 3]
+const row = await gpu.reshape([10, 20, 30], [3]);          // shape [3]
+await gpu.add(mat, row, { keepOnGpu: true });              // row added to every row → [2, 3]
+```
+
+Equal-length operands keep the plain element-wise fast path. Shapes that can't be
+broadcast (e.g. `[2,3]` vs `[2]`) throw. See [docs/broadcasting.md](./docs/broadcasting.md).
+
 ### Map
 
 ```javascript
@@ -265,6 +279,102 @@ const t = await gpu.transpose(m);            // dims inferred from the shape
   source while a view is in use (see [docs/shape-ops.md](./docs/shape-ops.md)).
 - A CPU array is uploaded to a fresh, owning `GPUArray` with the shape.
 - The element count must match the new shape, or it throws.
+
+### `gpu.unique(input, opts?)`
+
+Returns the **distinct** values of `input` in **ascending sorted order** (NumPy
+`np.unique` semantics). Variable-length output: the result is shorter than (or
+equal to) the input, and the length is data-dependent. Output dtype follows the
+input dtype.
+
+```javascript
+await gpu.unique([3, 1, 2, 3, 1, 2, 3]);          // [1, 2, 3]
+await gpu.unique([5, 4, 3, 2, 1]);                // [1, 2, 3, 4, 5]
+await gpu.unique(new Int32Array([3, -5, 0, -5])); // Int32Array [-5, 0, 3]
+```
+
+Implemented as `sort` → run-boundary flags → `scan` → stream compaction (reusing
+the multi-block `gpu.sort` and `gpu.scan`). Values are copied verbatim, so the
+GPU and CPU paths agree exactly for every dtype. A `GPUArray` input is never
+mutated. With `{ keepOnGpu: true }` the result stays on the device as a
+`GPUArray`. See [docs/unique.md](./docs/unique.md).
+
+### `gpu.segmentedReduce(values, segmentIds, { numSegments, op? })`
+
+Per-segment (group-by) reduction. Reduces `values` (length `N`) into `numSegments`
+groups keyed by `segmentIds` (length `N`, read as `u32`): output `s` is the
+reduction of every `values[i]` where `segmentIds[i] === s`. The GPU form of
+`groupby(...).agg()`. Output dtype follows `values`; length is `numSegments`.
+
+```javascript
+// Sum each group. seg0: 10+20, seg1: 1+2, seg2: 30.
+await gpu.segmentedReduce([10, 1, 20, 2, 30], [0, 1, 0, 1, 2], { numSegments: 3 });
+// Float32Array [30, 3, 30]
+
+await gpu.segmentedReduce(values, segIds, { numSegments: 4, op: "max" });
+```
+
+- `op`: `"sum"` (default) | `"product"` | `"min"` | `"max"`. Collision-safe via GPU atomics.
+- Empty segments hold the op's identity (`0` / `1` / `+3.4e38` / `-3.4e38`).
+- Out-of-range ids clamp to the last segment; `numSegments` must be `> 0`.
+- `f32` `sum`/`product` reassociate (compare with a tolerance); integer ops and `min`/`max` are exact.
+
+See [docs/segmented-reduce.md](./docs/segmented-reduce.md).
+
+### `gpu.random(n, opts?)`
+
+Generate `n` reproducible pseudo-random values on the GPU (no input array). The GPU counterpart to `numpy.random` for Monte-Carlo, initialisation, and sampling.
+
+```javascript
+await gpu.random(5);                    // Float32Array, 5 uniforms in [0, 1)
+await gpu.random(5, { seed: 42 });      // a different, fixed stream
+await gpu.random(5, { dtype: "u32" });  // raw 32-bit integers
+await gpu.random(1_000_000, { keepOnGpu: true }); // stays GPU-resident for chaining
+```
+
+The generator is stateless and counter-based: each output is a pure hash of `(seed, index)`, so the same `(n, seed, dtype)` always yields the same values — bit-for-bit on the GPU and the CPU fallback alike (no float-reassociation caveat). `seed` defaults to `0`. `dtype` (default `"f32"`) picks the output: `"f32"` → uniform `[0, 1)`; `"u32"` → raw 32-bit; `"i32"` → those bits as signed. See [docs/random.md](./docs/random.md).
+
+### `gpu.fft(input, opts?)`
+
+Forward FFT of a **real-valued** signal. Returns the **complex** spectrum as an
+interleaved `Float32Array` `[re0, im0, re1, im1, ...]` of length `2 * n`. WGSL has
+no native complex type, so a complex number is carried as a `vec2<f32>`.
+
+- `input` length **must be a power of two** (radix-2 Cooley-Tukey); a
+  non-power-of-two length throws.
+- Output dtype is always `f32` (the spectrum is complex); `i32`/`u32` inputs are
+  numerically cast to a real `f32` signal.
+- `{ keepOnGpu: true }` returns a `GPUArray` with `dtype === "f32"` and
+  `length === 2 * n`.
+
+```javascript
+await gpu.fft([1, 1, 1, 1, 1, 1, 1, 1]);
+// Float32Array(16): X[0] = (8, 0), all other bins ~ (0, 0)
+// bin k:  re = out[2*k],  im = out[2*k + 1]
+```
+
+See [docs/fft.md](./docs/fft.md) for the interleaved-complex layout, the
+power-of-two contract, and the per-stage butterfly design.
+
+### `gpu.convolve(input, kernel, opts?)`
+
+Discrete 1-D convolution of `input` with `kernel`, matching `numpy.convolve`. The
+kernel is reversed relative to the signal (true convolution, not correlation).
+
+- `opts.mode` selects the output length: `"full"` (default, `n + m - 1`),
+  `"same"` (`max(n, m)`, centred), or `"valid"` (`max(n, m) - min(n, m) + 1`,
+  full overlap only).
+- Output dtype follows `input` (`f32`/`i32`/`u32`).
+- `{ keepOnGpu: true }` returns a `GPUArray`.
+
+```javascript
+await gpu.convolve([1, 2, 3, 4], [1, 1, 1]);                   // [1, 3, 6, 9, 7, 4]
+await gpu.convolve([1, 2, 3, 4], [1, 1, 1], { mode: "same" });  // [3, 6, 9, 7]
+await gpu.convolve([1, 2, 3, 4], [1, 1, 1], { mode: "valid" }); // [6, 9]
+```
+
+See [docs/convolve.md](./docs/convolve.md) for the mode conventions and the
+per-output-element kernel design.
 
 ### Pipeline
 

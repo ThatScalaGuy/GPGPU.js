@@ -18,6 +18,9 @@ export type {
   FallbackMode,
   GPUOptions,
 } from "./core/types";
+export type { SegmentedReduceOpts, SegmentedReduceOp } from "./ops/segmented-reduce";
+export type { RandomOpts } from "./ops/random";
+export type { ConvolveOpts, ConvolveMode } from "./ops/convolve";
 
 import { GPU } from "./gpu";
 
