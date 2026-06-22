@@ -1,5 +1,5 @@
 import type {
-  NumericArray, TypedArray, MatMulOpts, ScatterOpts, HistogramOpts, KernelConfig,
+  NumericArray, TypedArray, DataType, MatMulOpts, ScatterOpts, SearchSortedOpts, HistogramOpts, TransposeOpts, KernelConfig,
   FallbackInfo, FallbackMode, GPUOptions, OpStats,
 } from "./core/types";
 import { inferDataType } from "./core/types";
@@ -20,19 +20,24 @@ import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
-  cpuArgmin, cpuArgmax, cpuGather, cpuScatter, cpuHistogram,
-  cpuMatmul, cpuScan, cpuSort,
+  cpuArgmin, cpuArgmax, cpuGather, cpuSearchsorted, cpuCast, cpuTranspose, cpuScatter, cpuHistogram,
+  cpuMatmul, cpuScan, cpuSort, cpuSortByKey, cpuFilter,
 } from "./fallback/cpu-ops";
 import {
   gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip,
 } from "./ops/elementwise";
 import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct, gpuArgmin, gpuArgmax } from "./ops/reduce";
 import { gpuGather } from "./ops/gather";
+import { gpuSearchsorted } from "./ops/searchsorted";
+import { gpuCast } from "./ops/cast";
+import { gpuTranspose } from "./ops/transpose";
 import { gpuScatter } from "./ops/scatter";
 import { gpuHistogram } from "./ops/histogram";
 import { gpuMatmul } from "./ops/matmul";
 import { gpuScan } from "./ops/scan";
 import { gpuSort } from "./ops/sort";
+import { gpuSortByKey } from "./ops/sort-by-key";
+import { gpuFilter } from "./ops/filter";
 import { Pipeline } from "./pipeline/pipeline";
 import { GPUArray } from "./pipeline/gpu-array";
 
@@ -207,6 +212,27 @@ export class GPU {
     );
   }
 
+  // --- Filter (stream compaction) ---
+
+  filter(input: NumericArray, predicate: ((x: number, i: number, len: number) => boolean) | string): Promise<TypedArray>;
+  filter(input: OpInput, predicate: ((x: number, i: number, len: number) => boolean) | string, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  filter(input: OpInput, predicate: ((x: number, i: number, len: number) => boolean) | string, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  filter(
+    input: OpInput,
+    predicate: ((x: number, i: number, len: number) => boolean) | string,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "filter",
+      (k) => gpuFilter(this.deviceManager, this.bufferPool, this.shaderCache, input, predicate, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuFilter(input as NumericArray, predicate),
+      hasGpu,
+      keep
+    );
+  }
+
   // --- Reduce ---
 
   reduce(
@@ -297,6 +323,85 @@ export class GPU {
       hasGpu,
       keep
     );
+  }
+
+  // --- Searchsorted ---
+
+  searchsorted(sorted: NumericArray, queries: NumericArray, opts?: SearchSortedOpts): Promise<Uint32Array>;
+  searchsorted(sorted: OpInput, queries: OpInput, opts: SearchSortedOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  searchsorted(sorted: OpInput, queries: OpInput, opts?: SearchSortedOpts & OpOptions): Promise<TypedArray | GPUArray>;
+  searchsorted(
+    sorted: OpInput,
+    queries: OpInput,
+    opts?: SearchSortedOpts & OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(sorted) || isGPUArray(queries);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "searchsorted",
+      (k) => gpuSearchsorted(this.deviceManager, this.bufferPool, this.shaderCache, sorted, queries, { ...opts, keepOnGpu: k } as SearchSortedOpts & { keepOnGpu: true }),
+      () => cpuSearchsorted(sorted as NumericArray, queries as NumericArray, opts?.side),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Transpose ---
+
+  transpose(input: NumericArray, opts: TransposeOpts): Promise<TypedArray>;
+  transpose(input: OpInput, opts: TransposeOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  transpose(input: OpInput, opts?: TransposeOpts & OpOptions): Promise<TypedArray | GPUArray>;
+  transpose(input: OpInput, opts?: TransposeOpts & OpOptions): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "transpose",
+      (k) => gpuTranspose(this.deviceManager, this.bufferPool, this.shaderCache, input, { ...opts, keepOnGpu: k } as TransposeOpts & { keepOnGpu: true }),
+      () => cpuTranspose(input as NumericArray, opts?.rows, opts?.cols),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Cast (output-dtype conversion) ---
+
+  cast(input: NumericArray, dtype: DataType): Promise<TypedArray>;
+  cast(input: OpInput, dtype: DataType, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  cast(input: OpInput, dtype: DataType, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  cast(input: OpInput, dtype: DataType, opts?: OpOptions): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "cast",
+      (k) => gpuCast(this.deviceManager, this.bufferPool, this.shaderCache, input, dtype, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuCast(input as NumericArray, dtype),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Reshape (zero-copy view) ---
+
+  // Pure metadata op. A GPUArray input -> a NON-owning view sharing the same buffer with the
+  // new shape (the SOURCE array still owns the buffer — don't destroy it while the view is in
+  // use). A CPU array input -> uploaded to a fresh OWNING GPUArray with the shape.
+  async reshape(input: OpInput, shape: number[]): Promise<GPUArray> {
+    const device = await this.deviceManager.getDevice();
+    const total = shape.reduce((a, b) => a * b, 1);
+    if (isGPUArray(input)) {
+      if (input.isDestroyed) throw new Error("GPUArray has been destroyed");
+      if (input.length !== total) {
+        throw new Error(`reshape: shape [${shape}] = ${total} elements but array has ${input.length}`);
+      }
+      return new GPUArray(input.buffer, input.length, input.dtype, device, this.bufferPool, { shape, owns: false });
+    }
+    const dtype = inferDataType(input);
+    const arr = toTypedArray(input, dtype);
+    if (arr.length !== total) {
+      throw new Error(`reshape: shape [${shape}] = ${total} elements but array has ${arr.length}`);
+    }
+    const buffer = uploadBuffer(device, arr, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, this.bufferPool);
+    return new GPUArray(buffer, arr.length, dtype, device, this.bufferPool, { shape });
   }
 
   // --- Scatter ---
@@ -398,6 +503,34 @@ export class GPU {
       () => cpuSort(input as NumericArray),
       hasGpu,
       keep
+    );
+  }
+
+  // --- Sort by key ---
+
+  sortByKey(keys: NumericArray, values: NumericArray): Promise<[TypedArray, TypedArray]>;
+  sortByKey(keys: OpInput, values: OpInput, opts: { keepOnGpu: true }): Promise<[GPUArray, GPUArray]>;
+  sortByKey(keys: OpInput, values: OpInput, opts?: OpOptions): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]>;
+  sortByKey(
+    keys: OpInput,
+    values: OpInput,
+    opts?: OpOptions
+  ): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]> {
+    // Two-output op → cannot use runArrayOp (single-output). Route manually, mirroring
+    // runArrayOp: forced-GPU when a GPUArray input or keepOnGpu; otherwise withFallback.
+    const hasGpu = isGPUArray(keys) || isGPUArray(values);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    if (hasGpu || keep) {
+      return this.timedGpu("sortByKey", () =>
+        gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values, { keepOnGpu: keep } as { keepOnGpu: true })
+      );
+    }
+    return withFallback(
+      this.deviceManager,
+      "sortByKey",
+      () => gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values),
+      () => cpuSortByKey(keys as NumericArray, values as NumericArray),
+      this.fallbackConfig()
     );
   }
 

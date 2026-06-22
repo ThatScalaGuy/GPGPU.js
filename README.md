@@ -113,12 +113,50 @@ Flat arrays with explicit dimensions. Uses tiled GPU algorithm with shared memor
 await gpu.sort(array)  // GPU-accelerated bitonic sort
 ```
 
+### Sort by key
+
+Sort `keys` ascending and permute `values` to follow, returning `[sortedKeys,
+sortedValues]`. `keys` and `values` must be the same length; the `values` dtype
+is independent of the `keys` dtype.
+
+```javascript
+const [keys, values] = await gpu.sortByKey([3, 1, 2], [30, 10, 20]);
+// keys   -> [1, 2, 3]
+// values -> [10, 20, 30]
+```
+
+- **Not stable.** For equal keys the relative order of their values is
+  unspecified (bitonic sort is not stable) — see
+  [docs/sort-by-key.md](./docs/sort-by-key.md).
+
 ### Prefix Sum (Scan)
 
 ```javascript
 await gpu.scan(array)                          // default: addition
 await gpu.scan(array, (a, b) => a + b, 0)     // custom scan
 ```
+
+### Filter
+
+Keep the elements for which `predicate(x, i, len)` holds, in order. The result is
+shorter than (or equal to) the input — `filter` is the library's first
+variable-length-output op.
+
+```javascript
+await gpu.filter([1, 2, 3, 4, 5, 6], x => x > 3);   // [4, 5, 6]
+await gpu.filter([1, 2, 3, 4, 5, 6], "x % 2 == 0"); // [2, 4, 6]
+await gpu.filter(data, (x, i, len) => i < len / 2); // first half
+```
+
+- The predicate must be a **boolean** expression (`< > <= >= == != && ||`),
+  unlike `map`, whose function returns a **number**. Internally the expression is
+  wrapped in `select(0u, 1u, (<expr>))`, so a non-boolean expression is a WGSL
+  type error.
+- Order-preserving: kept elements stay in their original relative order, with
+  exact values (no floating-point reassociation). The output dtype follows the
+  input.
+- Built from a flags pass → prefix-sum scan → compaction, with **one small
+  GPU→CPU readback** to learn the result length (see [docs/filter.md](./docs/filter.md)).
 
 ### Scatter
 
@@ -141,6 +179,28 @@ await gpu.scatter(bins, idx, ones, { mode: "add" });          // histogram-style
   compare-and-swap loop (see [docs/scatter.md](./docs/scatter.md)).
 - An out-of-range index clamps to the last element (the GPU can't throw).
 
+### Searchsorted
+
+Binary-search each query's insertion point into an **ascending** `sorted` array,
+one thread per query. NumPy-compatible. `sorted` and `queries` share the input
+dtype; the result is always a `Uint32Array` of length `queries.length`.
+
+```javascript
+// left (default): count of elements strictly < q
+await gpu.searchsorted([1, 3, 5, 7], [0, 1, 2, 3, 8]);                  // Uint32Array [0, 0, 1, 1, 4]
+
+// right: count of elements <= q
+await gpu.searchsorted([1, 3, 5, 7], [0, 1, 3, 8], { side: "right" }); // Uint32Array [0, 1, 2, 4]
+```
+
+- **`side: "left"`** (default) returns the leftmost insertion point — the count of
+  elements `< q`. **`side: "right"`** returns the rightmost — the count of
+  elements `<= q`. They differ only when `q` equals an element of `sorted`.
+- Out-of-range queries return `0` (below the minimum) or `sorted.length` (above
+  the maximum).
+- `sorted` **must** be ascending; results are undefined otherwise (not checked).
+  See [docs/searchsorted.md](./docs/searchsorted.md).
+
 ### Histogram
 
 Count values into `bins` equal-width buckets over `[min, max]`. Each element does
@@ -157,6 +217,54 @@ await gpu.histogram([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], { bins: 5, min: 0, max: 10 }
   NumPy). `x == max` lands in the last bin; `max == min` puts everything in bin 0.
 - Binning casts the input to `f32`, so `i32`/`u32` inputs work too (see
   [docs/histogram.md](./docs/histogram.md)).
+
+### Cast
+
+Convert an array to another dtype, element by element. The output dtype is the one
+you pass; the length is unchanged.
+
+```javascript
+await gpu.cast([1.9, 2.1, -3.7], "i32");   // Int32Array [1, 2, -3] (truncates toward zero)
+await gpu.cast(new Int32Array([1, 2, 3]), "f32");  // Float32Array [1, 2, 3]
+```
+
+- Uses WGSL's value constructors (`i32()`/`u32()`/`f32()`), so `f32 -> i32`/`u32`
+  truncates toward zero.
+- **Out-of-range and negative-to-unsigned conversions are
+  implementation-defined** — see [docs/shape-ops.md](./docs/shape-ops.md).
+
+### Transpose
+
+Transpose a flat row-major matrix. `{ rows, cols }` describe the **input**; the
+result is the logically `cols × rows` transpose, flattened.
+
+```javascript
+// [[1,2,3],[4,5,6]] (2x3) -> [[1,4],[2,5],[3,6]] (3x2)
+await gpu.transpose([1, 2, 3, 4, 5, 6], { rows: 2, cols: 3 });
+// Float32Array [1, 4, 2, 5, 3, 6]
+```
+
+- Tiled kernel with a shared, bank-conflict-padded tile (modeled on `matmul`).
+- A returned `GPUArray` carries `shape: [cols, rows]`, so you can `transpose` it
+  again with no explicit dims (double transpose returns the original).
+- For a 2D `GPUArray` from `reshape`, the dims are inferred from its `shape` —
+  pass no `{ rows, cols }`.
+
+### Reshape
+
+Reinterpret an array's shape without moving data. Returns a `GPUArray`.
+
+```javascript
+const g = await gpu.upload([1, 2, 3, 4, 5, 6]);
+const m = await gpu.reshape(g, [2, 3]);     // zero-copy view, shape [2, 3]
+const t = await gpu.transpose(m);            // dims inferred from the shape
+```
+
+- A `GPUArray` input returns a **zero-copy, non-owning view** that shares the
+  source buffer. The **source** array owns the buffer — don't `destroy()` the
+  source while a view is in use (see [docs/shape-ops.md](./docs/shape-ops.md)).
+- A CPU array is uploaded to a fresh, owning `GPUArray` with the shape.
+- The element count must match the new shape, or it throws.
 
 ### Pipeline
 
@@ -204,7 +312,8 @@ await gpu.add(g, 1, { keepOnGpu: false });          // force readback to a Typed
 ```
 
 `keepOnGpu` works on `add`/`subtract`/`multiply`/`divide`, `map`, `matmul`,
-`scan`, `sort`, `pipeline().run()`, and `createKernel().run()`. Reductions
+`scan`, `sort`, `pipeline().run()`, and `createKernel().run()` (`sortByKey`
+returns a pair of `GPUArray`s under `keepOnGpu`). Reductions
 (`sum`/`min`/`max`/`product`/`reduce`) accept a `GPUArray` input but always return
 a scalar `number`. In-place ops (`scan`, `sort`) never mutate a `GPUArray` input.
 
@@ -290,6 +399,10 @@ gpu.fallback = "silent";
 5. **Results returned as Float32Array** — ready to use
 
 The library manages GPU device initialization, buffer pooling, shader caching, and data transfer automatically.
+
+## Troubleshooting
+
+When a shader fails to compile, the thrown error includes a code frame of the generated WGSL (with a caret under the failing column) and, for codegen ops, a `from expression:` note echoing your JS. See [docs/debugging.md](./docs/debugging.md).
 
 ## Numerical Precision
 

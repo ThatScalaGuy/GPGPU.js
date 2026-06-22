@@ -1,5 +1,5 @@
 import type { DataType } from "../core/types";
-import { DEFAULT_WORKGROUP_SIZE, REDUCE_WORKGROUP_SIZE, MATMUL_TILE_SIZE } from "../core/types";
+import { DEFAULT_WORKGROUP_SIZE, REDUCE_WORKGROUP_SIZE, MATMUL_TILE_SIZE, TRANSPOSE_TILE_SIZE } from "../core/types";
 import { formatLiteral } from "./wgsl-emitter";
 
 export function mapShader(
@@ -82,6 +82,85 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let k = gid.x;
   if (k >= arrayLength(&idx_buf)) { return; }
   output[k] = src[min(idx_buf[k], arrayLength(&src) - 1u)];
+}
+`;
+}
+
+// Writes 1u where the predicate holds, else 0u. `expression` is a WGSL BOOLEAN expression
+// produced by emitWGSL (e.g. "(x > 5.0)"); x, idx (as i/len builtins) are available like map.
+export function predicateFlagShader(
+  expression: string,
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> flags: array<u32>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&input)) { return; }
+  let x = input[idx];
+  flags[idx] = select(0u, 1u, (${expression}));
+}
+`;
+}
+
+// Stream compaction: each kept element (flags[idx]==1) writes itself to its compacted slot.
+// `scanned` is the INCLUSIVE prefix sum of flags, so a kept element's 0-based output index is
+// scanned[idx] - 1.
+export function compactShader(
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> flags: array<u32>;
+@group(0) @binding(2) var<storage, read> scanned: array<u32>;
+@group(0) @binding(3) var<storage, read_write> output: array<${elemType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&input)) { return; }
+  if (flags[idx] == 1u) {
+    output[scanned[idx] - 1u] = input[idx];
+  }
+}
+`;
+}
+
+// Per-query binary search for the insertion index into an ascending `sorted` array.
+// left (lower_bound): count of elements strictly < q. right (upper_bound): count of elements <= q.
+export function searchsortedShader(
+  elemType: DataType = "f32",
+  side: "left" | "right" = "left",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  const cmp = side === "right" ? "<=" : "<";
+  return `
+@group(0) @binding(0) var<storage, read> sorted: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> queries: array<${elemType}>;
+@group(0) @binding(2) var<storage, read_write> out: array<u32>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&queries)) { return; }
+  let q = queries[i];
+  var lo = 0u;
+  var hi = arrayLength(&sorted);
+  loop {
+    if (lo >= hi) { break; }
+    let mid = lo + (hi - lo) / 2u;
+    if (sorted[mid] ${cmp} q) {
+      lo = mid + 1u;
+    } else {
+      hi = mid;
+    }
+  }
+  out[i] = lo;
 }
 `;
 }
@@ -448,6 +527,65 @@ fn main(
 `;
 }
 
+// output[idx] = toType(input[idx]); a map whose output dtype differs from its input dtype.
+// WGSL value-conversion constructors (i32()/u32()/f32()) handle the numeric conversion;
+// out-of-range / negative->unsigned results are implementation-defined (documented).
+export function castShader(
+  fromType: DataType,
+  toType: DataType,
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> input: array<${fromType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${toType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&input)) { return; }
+  output[idx] = ${toType}(input[idx]);
+}
+`;
+}
+
+// Tiled transpose. Input is row-major R×C (input[r*C+c]); output is row-major C×R
+// (output[c*R+r] = input[r*C+c]). The shared tile is TILE+1 wide to avoid bank conflicts.
+export function transposeShader(elemType: DataType = "f32", tileSize = TRANSPOSE_TILE_SIZE): string {
+  return `
+struct Dims { rows: u32, cols: u32 }
+
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
+@group(0) @binding(2) var<uniform> dims: Dims;
+
+var<workgroup> tile: array<array<${elemType}, ${tileSize + 1}>, ${tileSize}>;
+
+@compute @workgroup_size(${tileSize}, ${tileSize})
+fn main(
+  @builtin(workgroup_id) wid: vec3u,
+  @builtin(local_invocation_id) lid: vec3u
+) {
+  let R = dims.rows;
+  let C = dims.cols;
+
+  // Read input[r][c] into tile[ly][lx] (coalesced over c = lid.x).
+  let r = wid.y * ${tileSize}u + lid.y;
+  let c = wid.x * ${tileSize}u + lid.x;
+  if (r < R && c < C) {
+    tile[lid.y][lid.x] = input[r * C + c];
+  }
+  workgroupBarrier();
+
+  // Write output[c2][r2] = input[r2][c2], reading the tile transposed (coalesced over r2 = lid.x).
+  let r2 = wid.y * ${tileSize}u + lid.x;
+  let c2 = wid.x * ${tileSize}u + lid.y;
+  if (r2 < R && c2 < C) {
+    output[c2 * R + r2] = tile[lid.x][lid.y];
+  }
+}
+`;
+}
+
 export function bitonicSortShader(
   elemType: DataType = "f32",
   workgroupSize = DEFAULT_WORKGROUP_SIZE
@@ -483,6 +621,54 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (shouldSwap) {
     data[leftIdx] = rightVal;
     data[rightIdx] = leftVal;
+  }
+}
+`;
+}
+
+// Like bitonicSortShader but carries a values payload: keys drive the comparison, and when a
+// pair is swapped the matching values are swapped too. keyType drives ordering; valType is
+// independent (both 4 bytes).
+export function bitonicSortByKeyShader(
+  keyType: DataType = "f32",
+  valType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+struct Params {
+  blockSize: u32,
+  subBlockSize: u32,
+  length: u32,
+}
+
+@group(0) @binding(0) var<storage, read_write> keys: array<${keyType}>;
+@group(0) @binding(1) var<storage, read_write> values: array<${valType}>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  let pairDistance = params.subBlockSize;
+  let blockSize = params.blockSize;
+
+  let leftIdx = (idx / pairDistance) * (pairDistance * 2u) + (idx % pairDistance);
+  let rightIdx = leftIdx + pairDistance;
+
+  if (rightIdx >= params.length) { return; }
+
+  let sameDirection = ((leftIdx / blockSize) % 2u) == 0u;
+
+  let leftKey = keys[leftIdx];
+  let rightKey = keys[rightIdx];
+
+  let shouldSwap = select((leftKey < rightKey), (leftKey > rightKey), sameDirection);
+
+  if (shouldSwap) {
+    keys[leftIdx] = rightKey;
+    keys[rightIdx] = leftKey;
+    let tmp = values[leftIdx];
+    values[leftIdx] = values[rightIdx];
+    values[rightIdx] = tmp;
   }
 }
 `;

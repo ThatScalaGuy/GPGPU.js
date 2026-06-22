@@ -74,12 +74,13 @@ export async function gpuScan(
   const ir = parseExpression(fn, ["a", "b"]);
   const scanExpr = emitWGSL(ir, dtype);
   const identityStr = formatLiteral(identity, dtype);
+  const source = typeof fn === "string" ? fn : fn.toString();
 
   const blockScanPipe = await shaderCache.getOrCreate(
-    device, blockScanShader(scanExpr, identityStr, dtype), `scan-block-${dtype}`
+    device, blockScanShader(scanExpr, identityStr, dtype), `scan-block-${dtype}`, source
   );
   const addOffsetsPipe = await shaderCache.getOrCreate(
-    device, scanAddOffsetsShader(scanExpr, dtype), `scan-add-${dtype}`
+    device, scanAddOffsetsShader(scanExpr, dtype), `scan-add-${dtype}`, source
   );
 
   // Single command encoder for every level so the multi-block scan never round-trips
