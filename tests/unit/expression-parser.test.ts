@@ -12,6 +12,17 @@ function parse(
   return emitWGSL(ir, dtype);
 }
 
+// Mirrors how `gpuMap` parses index-aware expressions: `x`/`i`/`len` canonical params
+// plus the captured const-array names.
+function parseMap(
+  fn: ((...args: number[]) => number) | string,
+  consts: string[] = [],
+  dtype: DataType = "f32"
+): string {
+  const ir = parseExpression(fn, ["x", "i", "len"], consts);
+  return emitWGSL(ir, dtype);
+}
+
 describe("Expression Parser + WGSL Emitter", () => {
   describe("literals", () => {
     it("parses integer literals", () => {
@@ -263,6 +274,62 @@ describe("Expression Parser + WGSL Emitter", () => {
 
     it("places relational below shift", () => {
       expect(parse("x << 1 < 4", ["x"], "i32")).toBe("((x << 1) < 4)");
+    });
+  });
+
+  describe("index/length builtins", () => {
+    it("emits `i` as a float-cast of idx in f32 arithmetic", () => {
+      expect(parseMap("x + i")).toBe("(x + f32(idx))");
+      expect(parseMap((x: number, i: number) => x + i)).toBe("(x + f32(idx))");
+    });
+
+    it("emits `i` raw inside u32 arithmetic", () => {
+      expect(parseMap("x + i", [], "u32")).toBe("(x + idx)");
+    });
+
+    it("emits `i` as an i32-cast inside i32 arithmetic", () => {
+      expect(parseMap("x + i", [], "i32")).toBe("(x + i32(idx))");
+    });
+
+    it("emits `len` as arrayLength, float-cast for f32", () => {
+      expect(parseMap("x / len")).toBe("(x / f32(arrayLength(&input)))");
+      expect(parseMap("len", [], "u32")).toBe("arrayLength(&input)");
+    });
+
+    it("resolves the builtin even when it arrives as a positional arrow param", () => {
+      expect(parseMap((x: number, i: number, len: number) => x * len + i)).toBe(
+        "((x * f32(arrayLength(&input))) + f32(idx))"
+      );
+    });
+  });
+
+  describe("const-array subscript indexing", () => {
+    it("emits a const subscript with a u32 index", () => {
+      expect(parseMap("x * hann[i]", ["hann"])).toBe("(x * consts_hann[u32(idx)])");
+    });
+
+    it("keeps the index expression in u32 (literal gets a u suffix)", () => {
+      expect(parseMap("x * hann[i % 8]", ["hann"])).toBe(
+        "(x * consts_hann[u32((idx % 8u))])"
+      );
+    });
+
+    it("indexes by `len`", () => {
+      expect(parseMap("taps[len - 1]", ["taps"])).toBe(
+        "consts_taps[u32((arrayLength(&input) - 1u))]"
+      );
+    });
+
+    it("rejects subscripting an unknown identifier", () => {
+      expect(() => parseMap("x * foo[i]", [])).toThrow("Unknown identifier 'foo'");
+    });
+  });
+
+  describe("bracket tokenization", () => {
+    it("tokenizes `[` and `]` instead of throwing 'Unexpected character'", () => {
+      // An unmatched bracket now reaches the parser (expecting an array name) rather than
+      // dying in the tokenizer.
+      expect(() => parseMap("x[", [])).not.toThrow("Unexpected character");
     });
   });
 });

@@ -13,6 +13,13 @@ export interface OpOptions {
   keepOnGpu?: boolean;
 }
 
+/** Options for `map`: adds GPU-resident arrays captured by the expression. */
+export interface MapOptions extends OpOptions {
+  /** Arrays indexable inside the map expression (e.g. `hann[i]`). A GPUArray binds in
+   *  place (uploaded once); a plain array uploads per call. */
+  consts?: Record<string, OpInput>;
+}
+
 export function isGPUArray(x: unknown): x is GPUArray {
   return x instanceof GPUArray;
 }
