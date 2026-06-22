@@ -66,6 +66,26 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// output[k] = src[idx[k]]; one thread per idx element. An out-of-range index is clamped
+// to the last src element — the GPU can't throw, so this avoids an out-of-bounds read.
+export function gatherShader(
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> src: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> idx_buf: array<u32>;
+@group(0) @binding(2) var<storage, read_write> output: array<${elemType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let k = gid.x;
+  if (k >= arrayLength(&idx_buf)) { return; }
+  output[k] = src[min(idx_buf[k], arrayLength(&src) - 1u)];
+}
+`;
+}
+
 export function scalarBroadcastShader(
   op: string,
   elemType: DataType = "f32",
@@ -121,6 +141,68 @@ fn main(
 
   if (lid.x == 0u) {
     output[wid.x] = sdata[0];
+  }
+}
+`;
+}
+
+// Block-wise reduction that carries (value, index) pairs through twin buffers so the
+// surviving index of the min/max can be read back. Mirrors reduceShader's ping-pong
+// loop: each pass reads inVals/inIdxs and writes the per-workgroup winner to
+// outVals/outIdxs. On the first pass the carried index is the global index (params.firstPass);
+// later passes read the index forwarded by the previous pass. `better` flips with the mode.
+// Tie-break is first occurrence (NumPy): on equal values the smaller index wins, so the
+// combine never replaces a pair with a later, equal one. The workgroup arrays are named
+// sdata_* (NOT `shared`, a reserved WGSL keyword that would silently fail to compile).
+export function argReduceShader(
+  identity: string,
+  better: ">" | "<",
+  elemType: DataType = "f32",
+  workgroupSize = REDUCE_WORKGROUP_SIZE
+): string {
+  return `
+struct Params { firstPass: u32 }
+
+@group(0) @binding(0) var<storage, read> inVals: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> inIdxs: array<u32>;
+@group(0) @binding(2) var<storage, read_write> outVals: array<${elemType}>;
+@group(0) @binding(3) var<storage, read_write> outIdxs: array<u32>;
+@group(0) @binding(4) var<uniform> params: Params;
+
+var<workgroup> sdata_vals: array<${elemType}, ${workgroupSize}>;
+var<workgroup> sdata_idxs: array<u32, ${workgroupSize}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(
+  @builtin(global_invocation_id) gid: vec3u,
+  @builtin(local_invocation_id) lid: vec3u,
+  @builtin(workgroup_id) wid: vec3u
+) {
+  let idx = gid.x;
+  let inBounds = idx < arrayLength(&inVals);
+  sdata_vals[lid.x] = select(${identity}, inVals[idx], inBounds);
+  sdata_idxs[lid.x] = select(0u, select(inIdxs[idx], idx, params.firstPass == 1u), inBounds);
+
+  workgroupBarrier();
+
+  for (var stride = ${workgroupSize}u / 2u; stride > 0u; stride /= 2u) {
+    if (lid.x < stride) {
+      let aVal = sdata_vals[lid.x];
+      let aIdx = sdata_idxs[lid.x];
+      let bVal = sdata_vals[lid.x + stride];
+      let bIdx = sdata_idxs[lid.x + stride];
+      // Keep pair b only when it is strictly better, or ties on value with a smaller index.
+      if (bVal ${better} aVal || (bVal == aVal && bIdx < aIdx)) {
+        sdata_vals[lid.x] = bVal;
+        sdata_idxs[lid.x] = bIdx;
+      }
+    }
+    workgroupBarrier();
+  }
+
+  if (lid.x == 0u) {
+    outVals[wid.x] = sdata_vals[0];
+    outIdxs[wid.x] = sdata_idxs[0];
   }
 }
 `;

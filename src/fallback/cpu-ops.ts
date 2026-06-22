@@ -162,6 +162,38 @@ export function cpuProduct(input: NumericArray): number {
   return prod;
 }
 
+// Strict `<` so the FIRST minimum wins on ties — matches the GPU first-occurrence tie-break.
+export function cpuArgmin(input: NumericArray): number {
+  const arr = toTypedArray(input, inferDataType(input));
+  if (arr.length === 0) return -1;
+  let best = 0;
+  for (let i = 1; i < arr.length; i++) if (arr[i] < arr[best]) best = i;
+  return best;
+}
+
+// Strict `>` so the FIRST maximum wins on ties — matches the GPU first-occurrence tie-break.
+export function cpuArgmax(input: NumericArray): number {
+  const arr = toTypedArray(input, inferDataType(input));
+  if (arr.length === 0) return -1;
+  let best = 0;
+  for (let i = 1; i < arr.length; i++) if (arr[i] > arr[best]) best = i;
+  return best;
+}
+
+// output[k] = src[idx[k]]; an out-of-range index clamps to the last element, matching the
+// GPU gather shader (which can't throw). Output dtype follows src; idx is read as u32.
+export function cpuGather(src: NumericArray, idx: NumericArray): TypedArray {
+  const dtype = inferDataType(src);
+  const arrSrc = toTypedArray(src, dtype);
+  const arrIdx = toTypedArray(idx, "u32");
+  const result = resultArray(dtype, arrIdx.length);
+  const last = arrSrc.length - 1;
+  for (let k = 0; k < arrIdx.length; k++) {
+    result[k] = arrSrc[Math.min(arrIdx[k], last)];
+  }
+  return result;
+}
+
 export function cpuMatmul(
   a: NumericArray,
   b: NumericArray,
