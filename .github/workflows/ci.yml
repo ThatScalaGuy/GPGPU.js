@@ -33,3 +33,30 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # Real-GPU tests via Google Dawn (the `webgpu` package). On a headless Ubuntu
+  # runner Dawn has no hardware GPU, so it needs a software Vulkan driver
+  # (Mesa lavapipe) to find an adapter. Single Node version to keep it fast.
+  # The browser (Playwright/Chromium) GPU matrix is deferred — see
+  # vitest.browser.config.ts — and intentionally not run here.
+  gpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install software Vulkan driver (Mesa lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Real-GPU tests (Dawn headless)
+        run: npm run test:node-gpu

@@ -53,6 +53,14 @@
     "access": "public",
     "provenance": true
   },
+  "peerDependencies": {
+    "webgpu": "^0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "webgpu": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@vitest/browser": "^2.1.9",
     "@webgpu/types": "^0.1.0",

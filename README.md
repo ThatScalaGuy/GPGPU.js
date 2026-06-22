@@ -253,6 +253,16 @@ gpu.fallback = "silent";
 
 The library manages GPU device initialization, buffer pooling, shader caching, and data transfer automatically.
 
+## Numerical Precision
+
+Reductions (`sum`, `reduce`, `scan`) and the index reductions (`argmin`,
+`argmax`) run as a **parallel tree** on the GPU. Because floating-point addition
+is not associative, reassociating the additions can make a GPU float result
+differ from a sequential CPU result **in the last bits** — even though every
+individual IEEE-754 op is deterministic. Tests compare GPU floats against a CPU
+reference with a small tolerance rather than strict equality. Integer reductions
+are exact. See [docs/numerics.md](./docs/numerics.md) for details.
+
 ## Browser Support
 
 WebGPU is supported in:
@@ -261,6 +271,21 @@ WebGPU is supported in:
 - Safari 18+
 
 When WebGPU is unavailable, all operations automatically fall back to CPU implementations.
+
+## Node.js
+
+GPGPU.js also runs on **Node** via Google Dawn. Node has no built-in
+`navigator.gpu`, so install the optional [`webgpu`](https://www.npmjs.com/package/webgpu)
+package and the library auto-detects it — no configuration:
+
+```bash
+npm install @thatscalaguy/gpgpu.js webgpu
+```
+
+`webgpu` is an optional peer dependency; the import is lazy and Node-gated, so it
+never enters the browser bundle. Deno and Web Workers expose `navigator.gpu`
+natively and work with no extra setup. See [docs/runtimes.md](./docs/runtimes.md)
+for details and the `f32`/`i32`/`u32` dtype boundary.
 
 ## Contributing
 
