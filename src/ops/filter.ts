@@ -63,8 +63,9 @@ export async function gpuFilter(
     ["x", "i", "len"]
   );
   const expr = emitWGSL(ir, dtype);
+  const source = typeof predicate === "string" ? predicate : predicate.toString();
   const flagPipe = await shaderCache.getOrCreate(
-    device, predicateFlagShader(expr, dtype), `filter-flags-${dtype}`
+    device, predicateFlagShader(expr, dtype), `filter-flags-${dtype}`, source
   );
   const flagsBuf = bufferPool.acquire(
     device, n * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST

@@ -400,6 +400,10 @@ gpu.fallback = "silent";
 
 The library manages GPU device initialization, buffer pooling, shader caching, and data transfer automatically.
 
+## Troubleshooting
+
+When a shader fails to compile, the thrown error includes a code frame of the generated WGSL (with a caret under the failing column) and, for codegen ops, a `from expression:` note echoing your JS. See [docs/debugging.md](./docs/debugging.md).
+
 ## Numerical Precision
 
 Reductions (`sum`, `reduce`, `scan`) and the index reductions (`argmin`,
