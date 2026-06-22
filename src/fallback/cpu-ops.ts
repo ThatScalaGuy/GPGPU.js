@@ -194,6 +194,29 @@ export function cpuGather(src: NumericArray, idx: NumericArray): TypedArray {
   return result;
 }
 
+// TypedArray assignment performs the numeric conversion (matches WGSL for in-range values).
+export function cpuCast(input: NumericArray, toDtype: DataType): TypedArray {
+  const arr = toTypedArray(input, inferDataType(input));
+  const out = resultArray(toDtype, arr.length);
+  for (let i = 0; i < arr.length; i++) out[i] = arr[i];
+  return out;
+}
+
+// out[c*rows+r] = input[r*cols+c]: transpose a row-major rows×cols array into cols×rows.
+// A CPU array carries no shape, so { rows, cols } is required.
+export function cpuTranspose(input: NumericArray, rows?: number, cols?: number): TypedArray {
+  if (rows == null || cols == null) throw new Error("transpose of a CPU array requires { rows, cols }");
+  const dtype = inferDataType(input);
+  const arr = toTypedArray(input, dtype);
+  const out = resultArray(dtype, rows * cols);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      out[c * rows + r] = arr[r * cols + c];
+    }
+  }
+  return out;
+}
+
 // out = copy of dst with vals scattered at idx. mode "set" overwrites (last write wins on
 // duplicate idx); "add" accumulates. Out-of-range idx clamps to the last element, matching
 // the GPU shader. Integer wrap on overflow matches the GPU atomics (TypedArray truncation).

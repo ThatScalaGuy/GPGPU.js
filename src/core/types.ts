@@ -33,6 +33,11 @@ export interface HistogramOpts {
   max: number;
 }
 
+export interface TransposeOpts {
+  rows?: number;
+  cols?: number;
+}
+
 /** Which backend actually executed an op. */
 export type Backend = "gpu" | "cpu";
 
@@ -96,3 +101,4 @@ export function inferDataType(input: NumericArray): DataType {
 export const DEFAULT_WORKGROUP_SIZE = 64;
 export const REDUCE_WORKGROUP_SIZE = 256;
 export const MATMUL_TILE_SIZE = 8;
+export const TRANSPOSE_TILE_SIZE = 16;

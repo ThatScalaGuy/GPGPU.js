@@ -9,6 +9,7 @@ export type {
   MatMulOpts,
   ScatterOpts,
   HistogramOpts,
+  TransposeOpts,
   BufferSpec,
   Backend,
   OpStats,

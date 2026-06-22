@@ -174,6 +174,54 @@ await gpu.histogram([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], { bins: 5, min: 0, max: 10 }
 - Binning casts the input to `f32`, so `i32`/`u32` inputs work too (see
   [docs/histogram.md](./docs/histogram.md)).
 
+### Cast
+
+Convert an array to another dtype, element by element. The output dtype is the one
+you pass; the length is unchanged.
+
+```javascript
+await gpu.cast([1.9, 2.1, -3.7], "i32");   // Int32Array [1, 2, -3] (truncates toward zero)
+await gpu.cast(new Int32Array([1, 2, 3]), "f32");  // Float32Array [1, 2, 3]
+```
+
+- Uses WGSL's value constructors (`i32()`/`u32()`/`f32()`), so `f32 -> i32`/`u32`
+  truncates toward zero.
+- **Out-of-range and negative-to-unsigned conversions are
+  implementation-defined** — see [docs/shape-ops.md](./docs/shape-ops.md).
+
+### Transpose
+
+Transpose a flat row-major matrix. `{ rows, cols }` describe the **input**; the
+result is the logically `cols × rows` transpose, flattened.
+
+```javascript
+// [[1,2,3],[4,5,6]] (2x3) -> [[1,4],[2,5],[3,6]] (3x2)
+await gpu.transpose([1, 2, 3, 4, 5, 6], { rows: 2, cols: 3 });
+// Float32Array [1, 4, 2, 5, 3, 6]
+```
+
+- Tiled kernel with a shared, bank-conflict-padded tile (modeled on `matmul`).
+- A returned `GPUArray` carries `shape: [cols, rows]`, so you can `transpose` it
+  again with no explicit dims (double transpose returns the original).
+- For a 2D `GPUArray` from `reshape`, the dims are inferred from its `shape` —
+  pass no `{ rows, cols }`.
+
+### Reshape
+
+Reinterpret an array's shape without moving data. Returns a `GPUArray`.
+
+```javascript
+const g = await gpu.upload([1, 2, 3, 4, 5, 6]);
+const m = await gpu.reshape(g, [2, 3]);     // zero-copy view, shape [2, 3]
+const t = await gpu.transpose(m);            // dims inferred from the shape
+```
+
+- A `GPUArray` input returns a **zero-copy, non-owning view** that shares the
+  source buffer. The **source** array owns the buffer — don't `destroy()` the
+  source while a view is in use (see [docs/shape-ops.md](./docs/shape-ops.md)).
+- A CPU array is uploaded to a fresh, owning `GPUArray` with the shape.
+- The element count must match the new shape, or it throws.
+
 ### Pipeline
 
 Chain operations to keep data on the GPU between steps:

@@ -1,5 +1,5 @@
 import type { DataType } from "../core/types";
-import { DEFAULT_WORKGROUP_SIZE, REDUCE_WORKGROUP_SIZE, MATMUL_TILE_SIZE } from "../core/types";
+import { DEFAULT_WORKGROUP_SIZE, REDUCE_WORKGROUP_SIZE, MATMUL_TILE_SIZE, TRANSPOSE_TILE_SIZE } from "../core/types";
 import { formatLiteral } from "./wgsl-emitter";
 
 export function mapShader(
@@ -443,6 +443,65 @@ fn main(
 
   if (row < dims.M && col < dims.N) {
     result[row * dims.N + col] = sum;
+  }
+}
+`;
+}
+
+// output[idx] = toType(input[idx]); a map whose output dtype differs from its input dtype.
+// WGSL value-conversion constructors (i32()/u32()/f32()) handle the numeric conversion;
+// out-of-range / negative->unsigned results are implementation-defined (documented).
+export function castShader(
+  fromType: DataType,
+  toType: DataType,
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> input: array<${fromType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${toType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&input)) { return; }
+  output[idx] = ${toType}(input[idx]);
+}
+`;
+}
+
+// Tiled transpose. Input is row-major R×C (input[r*C+c]); output is row-major C×R
+// (output[c*R+r] = input[r*C+c]). The shared tile is TILE+1 wide to avoid bank conflicts.
+export function transposeShader(elemType: DataType = "f32", tileSize = TRANSPOSE_TILE_SIZE): string {
+  return `
+struct Dims { rows: u32, cols: u32 }
+
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
+@group(0) @binding(2) var<uniform> dims: Dims;
+
+var<workgroup> tile: array<array<${elemType}, ${tileSize + 1}>, ${tileSize}>;
+
+@compute @workgroup_size(${tileSize}, ${tileSize})
+fn main(
+  @builtin(workgroup_id) wid: vec3u,
+  @builtin(local_invocation_id) lid: vec3u
+) {
+  let R = dims.rows;
+  let C = dims.cols;
+
+  // Read input[r][c] into tile[ly][lx] (coalesced over c = lid.x).
+  let r = wid.y * ${tileSize}u + lid.y;
+  let c = wid.x * ${tileSize}u + lid.x;
+  if (r < R && c < C) {
+    tile[lid.y][lid.x] = input[r * C + c];
+  }
+  workgroupBarrier();
+
+  // Write output[c2][r2] = input[r2][c2], reading the tile transposed (coalesced over r2 = lid.x).
+  let r2 = wid.y * ${tileSize}u + lid.x;
+  let c2 = wid.x * ${tileSize}u + lid.y;
+  if (r2 < R && c2 < C) {
+    output[c2 * R + r2] = tile[lid.x][lid.y];
   }
 }
 `;

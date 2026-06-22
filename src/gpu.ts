@@ -1,5 +1,5 @@
 import type {
-  NumericArray, TypedArray, MatMulOpts, ScatterOpts, HistogramOpts, KernelConfig,
+  NumericArray, TypedArray, DataType, MatMulOpts, ScatterOpts, HistogramOpts, TransposeOpts, KernelConfig,
   FallbackInfo, FallbackMode, GPUOptions, OpStats,
 } from "./core/types";
 import { inferDataType } from "./core/types";
@@ -20,7 +20,7 @@ import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
-  cpuArgmin, cpuArgmax, cpuGather, cpuScatter, cpuHistogram,
+  cpuArgmin, cpuArgmax, cpuGather, cpuCast, cpuTranspose, cpuScatter, cpuHistogram,
   cpuMatmul, cpuScan, cpuSort, cpuSortByKey,
 } from "./fallback/cpu-ops";
 import {
@@ -28,6 +28,8 @@ import {
 } from "./ops/elementwise";
 import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct, gpuArgmin, gpuArgmax } from "./ops/reduce";
 import { gpuGather } from "./ops/gather";
+import { gpuCast } from "./ops/cast";
+import { gpuTranspose } from "./ops/transpose";
 import { gpuScatter } from "./ops/scatter";
 import { gpuHistogram } from "./ops/histogram";
 import { gpuMatmul } from "./ops/matmul";
@@ -298,6 +300,64 @@ export class GPU {
       hasGpu,
       keep
     );
+  }
+
+  // --- Transpose ---
+
+  transpose(input: NumericArray, opts: TransposeOpts): Promise<TypedArray>;
+  transpose(input: OpInput, opts: TransposeOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  transpose(input: OpInput, opts?: TransposeOpts & OpOptions): Promise<TypedArray | GPUArray>;
+  transpose(input: OpInput, opts?: TransposeOpts & OpOptions): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "transpose",
+      (k) => gpuTranspose(this.deviceManager, this.bufferPool, this.shaderCache, input, { ...opts, keepOnGpu: k } as TransposeOpts & { keepOnGpu: true }),
+      () => cpuTranspose(input as NumericArray, opts?.rows, opts?.cols),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Cast (output-dtype conversion) ---
+
+  cast(input: NumericArray, dtype: DataType): Promise<TypedArray>;
+  cast(input: OpInput, dtype: DataType, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  cast(input: OpInput, dtype: DataType, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  cast(input: OpInput, dtype: DataType, opts?: OpOptions): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "cast",
+      (k) => gpuCast(this.deviceManager, this.bufferPool, this.shaderCache, input, dtype, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuCast(input as NumericArray, dtype),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Reshape (zero-copy view) ---
+
+  // Pure metadata op. A GPUArray input -> a NON-owning view sharing the same buffer with the
+  // new shape (the SOURCE array still owns the buffer — don't destroy it while the view is in
+  // use). A CPU array input -> uploaded to a fresh OWNING GPUArray with the shape.
+  async reshape(input: OpInput, shape: number[]): Promise<GPUArray> {
+    const device = await this.deviceManager.getDevice();
+    const total = shape.reduce((a, b) => a * b, 1);
+    if (isGPUArray(input)) {
+      if (input.isDestroyed) throw new Error("GPUArray has been destroyed");
+      if (input.length !== total) {
+        throw new Error(`reshape: shape [${shape}] = ${total} elements but array has ${input.length}`);
+      }
+      return new GPUArray(input.buffer, input.length, input.dtype, device, this.bufferPool, { shape, owns: false });
+    }
+    const dtype = inferDataType(input);
+    const arr = toTypedArray(input, dtype);
+    if (arr.length !== total) {
+      throw new Error(`reshape: shape [${shape}] = ${total} elements but array has ${arr.length}`);
+    }
+    const buffer = uploadBuffer(device, arr, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, this.bufferPool);
+    return new GPUArray(buffer, arr.length, dtype, device, this.bufferPool, { shape });
   }
 
   // --- Scatter ---
