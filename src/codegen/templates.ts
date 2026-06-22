@@ -5,17 +5,43 @@ import { formatLiteral } from "./wgsl-emitter";
 export function mapShader(
   expression: string,
   elemType: DataType = "f32",
+  consts: { name: string; dtype: DataType }[] = [],
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
+  // One read-only storage binding per captured const array, after input/output.
+  const constBindings = consts
+    .map((c, i) => `@group(0) @binding(${i + 2}) var<storage, read> consts_${c.name}: array<${c.dtype}>;\n`)
+    .join("");
   return `
 @group(0) @binding(0) var<storage, read> input: array<${elemType}>;
 @group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
-
+${constBindings}
 @compute @workgroup_size(${workgroupSize})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let idx = gid.x;
   if (idx >= arrayLength(&input)) { return; }
   let x = input[idx];
+  output[idx] = ${expression};
+}
+`;
+}
+
+export function zipShader(
+  expression: string,
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read> a_in: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> b_in: array<${elemType}>;
+@group(0) @binding(2) var<storage, read_write> output: array<${elemType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&a_in)) { return; }
+  let a = a_in[idx];
+  let b = b_in[idx];
   output[idx] = ${expression};
 }
 `;

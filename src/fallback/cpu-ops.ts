@@ -75,15 +75,44 @@ export function cpuDivide(
 
 export function cpuMap(
   input: NumericArray,
-  fn: ((x: number) => number) | string
+  fn: ((x: number, i: number, len: number) => number) | string,
+  consts?: Record<string, NumericArray>
 ): TypedArray {
   const dtype = inferDataType(input);
   const arr = toTypedArray(input, dtype);
   const result = resultArray(dtype, arr.length);
+  const constNames = consts ? Object.keys(consts) : [];
+  const constValues = constNames.map((name) => consts![name]);
   const mapFn =
-    typeof fn === "string" ? new Function("x", `return ${fn}`) as (x: number) => number : fn;
+    typeof fn === "string"
+      ? (new Function("x", "i", "len", ...constNames, `return ${fn}`) as (
+          x: number,
+          i: number,
+          len: number,
+          ...rest: NumericArray[]
+        ) => number)
+      : fn;
   for (let i = 0; i < arr.length; i++) {
-    result[i] = mapFn(arr[i]);
+    result[i] = mapFn(arr[i], i, arr.length, ...constValues);
+  }
+  return result;
+}
+
+export function cpuZip(
+  a: NumericArray,
+  b: NumericArray,
+  fn: ((a: number, b: number) => number) | string
+): TypedArray {
+  const dtype = inferDataType(a);
+  const arrA = toTypedArray(a, dtype);
+  const arrB = toTypedArray(b, dtype);
+  const result = resultArray(dtype, arrA.length);
+  const zipFn =
+    typeof fn === "string"
+      ? (new Function("a", "b", `return ${fn}`) as (a: number, b: number) => number)
+      : fn;
+  for (let i = 0; i < arrA.length; i++) {
+    result[i] = zipFn(arrA[i], arrB[i]);
   }
   return result;
 }

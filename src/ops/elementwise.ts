@@ -8,6 +8,7 @@ import { GPUArray } from "../pipeline/gpu-array";
 import {
   type OpInput,
   type OpOptions,
+  type MapOptions,
   resolveInput,
   inputDtype,
   isGPUArray,
@@ -18,6 +19,7 @@ import { parseExpression } from "../codegen/expression-parser";
 import { emitWGSL } from "../codegen/wgsl-emitter";
 import {
   mapShader,
+  zipShader,
   elementwiseBinaryShader,
   scalarBroadcastShader,
 } from "../codegen/templates";
@@ -64,6 +66,70 @@ export async function gpuElementwiseBinary(
 
   const shader = elementwiseBinaryShader(op, dtype);
   const pipeline = await shaderCache.getOrCreate(device, shader, `elementwise-${op}-${dtype}`);
+
+  const bufOut = createOutputBuffer(device, byteSize, bufferPool);
+
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: ra.buffer, size: byteSize } },
+      { binding: 1, resource: { buffer: rb.buffer, size: byteSize } },
+      { binding: 2, resource: { buffer: bufOut, size: byteSize } },
+    ],
+  });
+
+  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
+
+  ra.release();
+  rb.release();
+
+  return finalize(new GPUArray(bufOut, size, dtype, device, bufferPool), opts?.keepOnGpu ?? false);
+}
+
+export function gpuZip(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  a: OpInput,
+  b: OpInput,
+  fn: ((a: number, b: number) => number) | string,
+  opts: { keepOnGpu: true }
+): Promise<GPUArray>;
+export function gpuZip(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  a: OpInput,
+  b: OpInput,
+  fn: ((a: number, b: number) => number) | string,
+  opts?: OpOptions
+): Promise<TypedArray>;
+export async function gpuZip(
+  deviceManager: DeviceManager,
+  bufferPool: BufferPool,
+  shaderCache: ShaderCache,
+  a: OpInput,
+  b: OpInput,
+  fn: ((a: number, b: number) => number) | string,
+  opts?: OpOptions
+): Promise<TypedArray | GPUArray> {
+  const device = await deviceManager.getDevice();
+  const dtype = inputDtype(a);
+
+  if (isGPUArray(a) && isGPUArray(b)) {
+    if (a.dtype !== b.dtype) throw new Error("Elementwise inputs must share a data type");
+    if (a.length !== b.length) throw new Error("Elementwise inputs must have the same length");
+  }
+
+  const ra = resolveInput(a, device, bufferPool, dtype);
+  const rb = resolveInput(b, device, bufferPool, dtype);
+  const size = ra.length;
+  const byteSize = size * 4;
+
+  const ir = parseExpression(fn, ["a", "b"]);
+  const expression = emitWGSL(ir, dtype);
+  const shader = zipShader(expression, dtype);
+  const pipeline = await shaderCache.getOrCreate(device, shader, `zip-${dtype}`);
 
   const bufOut = createOutputBuffer(device, byteSize, bufferPool);
 
@@ -149,24 +215,24 @@ export function gpuMap(
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: OpInput,
-  fn: ((x: number) => number) | string,
-  opts: { keepOnGpu: true }
+  fn: ((x: number, i: number, len: number) => number) | string,
+  opts: MapOptions & { keepOnGpu: true }
 ): Promise<GPUArray>;
 export function gpuMap(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: OpInput,
-  fn: ((x: number) => number) | string,
-  opts?: OpOptions
+  fn: ((x: number, i: number, len: number) => number) | string,
+  opts?: MapOptions
 ): Promise<TypedArray>;
 export async function gpuMap(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: OpInput,
-  fn: ((x: number) => number) | string,
-  opts?: OpOptions
+  fn: ((x: number, i: number, len: number) => number) | string,
+  opts?: MapOptions
 ): Promise<TypedArray | GPUArray> {
   const device = await deviceManager.getDevice();
   const dtype = inputDtype(input);
@@ -175,10 +241,19 @@ export async function gpuMap(
   const size = rin.length;
   const byteSize = size * 4;
 
-  const ir = parseExpression(fn, ["x"]);
+  // Captured const arrays, bound read-only after input/output. A GPUArray binds in place
+  // (no re-upload); a plain array uploads to a pooled buffer for this call.
+  const constNames = opts?.consts ? Object.keys(opts.consts) : [];
+  const resolvedConsts = constNames.map((name) => {
+    const value = opts!.consts![name];
+    return { name, dtype: inputDtype(value), resolved: resolveInput(value, device, bufferPool, inputDtype(value)) };
+  });
+
+  const ir = parseExpression(fn, ["x", "i", "len"], constNames);
   const expression = emitWGSL(ir, dtype);
-  const shader = mapShader(expression, dtype);
-  const pipeline = await shaderCache.getOrCreate(device, shader, `map-${dtype}`);
+  const shader = mapShader(expression, dtype, resolvedConsts.map((c) => ({ name: c.name, dtype: c.dtype })));
+  // The const names go in the cache key so kernels with different captures don't collide.
+  const pipeline = await shaderCache.getOrCreate(device, shader, `map-${dtype}-${constNames.join(",")}`);
 
   const bufOut = createOutputBuffer(device, byteSize, bufferPool);
 
@@ -187,12 +262,17 @@ export async function gpuMap(
     entries: [
       { binding: 0, resource: { buffer: rin.buffer, size: byteSize } },
       { binding: 1, resource: { buffer: bufOut, size: byteSize } },
+      ...resolvedConsts.map((c, i) => ({
+        binding: i + 2,
+        resource: { buffer: c.resolved.buffer, size: c.resolved.length * 4 },
+      })),
     ],
   });
 
   dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
 
   rin.release();
+  for (const c of resolvedConsts) c.resolved.release();
 
   return finalize(new GPUArray(bufOut, size, dtype, device, bufferPool), opts?.keepOnGpu ?? false);
 }

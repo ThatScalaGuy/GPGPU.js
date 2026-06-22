@@ -56,6 +56,19 @@ export function emitWGSL(node: IRNode, dtype: DataType = "f32"): string {
     case "param":
       return node.name;
 
+    case "builtin": {
+      // `i` is the element index (`idx`), `len` the input length — both u32 in WGSL.
+      // Cast to the active dtype so they stay valid inside f32/i32 arithmetic; a u32
+      // context (e.g. an array subscript) takes the raw value.
+      const raw = node.name === "i" ? "idx" : "arrayLength(&input)";
+      return dtype === "u32" ? raw : `${dtype}(${raw})`;
+    }
+
+    case "index":
+      // Captured const arrays are indexed in u32: emit the index sub-expression as u32
+      // (so `i`->`idx` and literals get a `u` suffix) and guard with an explicit cast.
+      return `consts_${node.array}[u32(${emitWGSL(node.index, "u32")})]`;
+
     case "binary": {
       const wgslOp = OP_MAP[node.op];
       if (!wgslOp) {

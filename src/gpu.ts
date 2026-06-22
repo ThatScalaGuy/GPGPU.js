@@ -11,6 +11,7 @@ import { toTypedArray } from "./utils/data-conversion";
 import {
   type OpInput,
   type OpOptions,
+  type MapOptions,
   isGPUArray,
   resolveInput,
   finalize,
@@ -18,11 +19,11 @@ import {
 import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
-  cpuMap, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
+  cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
   cpuMatmul, cpuScan, cpuSort,
 } from "./fallback/cpu-ops";
 import {
-  gpuElementwiseBinary, gpuScalarBroadcast, gpuMap,
+  gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip,
 } from "./ops/elementwise";
 import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct } from "./ops/reduce";
 import { gpuMatmul } from "./ops/matmul";
@@ -161,20 +162,42 @@ export class GPU {
 
   // --- Map ---
 
-  map(input: NumericArray, fn: ((x: number) => number) | string): Promise<TypedArray>;
-  map(input: OpInput, fn: ((x: number) => number) | string, opts: { keepOnGpu: true }): Promise<GPUArray>;
-  map(input: OpInput, fn: ((x: number) => number) | string, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  map(input: NumericArray, fn: ((x: number, i: number, len: number) => number) | string, opts?: MapOptions): Promise<TypedArray>;
+  map(input: OpInput, fn: ((x: number, i: number, len: number) => number) | string, opts: MapOptions & { keepOnGpu: true }): Promise<GPUArray>;
+  map(input: OpInput, fn: ((x: number, i: number, len: number) => number) | string, opts?: MapOptions): Promise<TypedArray | GPUArray>;
   map(
     input: OpInput,
-    fn: ((x: number) => number) | string,
-    opts?: OpOptions
+    fn: ((x: number, i: number, len: number) => number) | string,
+    opts?: MapOptions
   ): Promise<TypedArray | GPUArray> {
     const hasGpu = isGPUArray(input);
     const keep = opts?.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
       "map",
-      (k) => gpuMap(this.deviceManager, this.bufferPool, this.shaderCache, input, fn, { keepOnGpu: k } as { keepOnGpu: true }),
-      () => cpuMap(input as NumericArray, fn),
+      (k) => gpuMap(this.deviceManager, this.bufferPool, this.shaderCache, input, fn, { ...opts, keepOnGpu: k } as MapOptions & { keepOnGpu: true }),
+      () => cpuMap(input as NumericArray, fn, opts?.consts as Record<string, NumericArray> | undefined),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Zip (two-input map) ---
+
+  zip(a: NumericArray, b: NumericArray, fn: ((a: number, b: number) => number) | string): Promise<TypedArray>;
+  zip(a: OpInput, b: OpInput, fn: ((a: number, b: number) => number) | string, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  zip(a: OpInput, b: OpInput, fn: ((a: number, b: number) => number) | string, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  zip(
+    a: OpInput,
+    b: OpInput,
+    fn: ((a: number, b: number) => number) | string,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(a) || isGPUArray(b);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "zip",
+      (k) => gpuZip(this.deviceManager, this.bufferPool, this.shaderCache, a, b, fn, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuZip(a as NumericArray, b as NumericArray, fn),
       hasGpu,
       keep
     );

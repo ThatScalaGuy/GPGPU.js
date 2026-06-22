@@ -106,6 +106,18 @@ function tokenize(source: string): Token[] {
       continue;
     }
 
+    if (ch === "[") {
+      tokens.push({ type: "lbracket", value: ch });
+      i++;
+      continue;
+    }
+
+    if (ch === "]") {
+      tokens.push({ type: "rbracket", value: ch });
+      i++;
+      continue;
+    }
+
     throw new Error(`Unexpected character '${ch}' at position ${i}`);
   }
 
@@ -113,16 +125,20 @@ function tokenize(source: string): Token[] {
   return tokens;
 }
 
+const BUILTINS = new Set(["i", "len"]);
+
 class Parser {
   private tokens: Token[];
   private pos = 0;
   private params: string[];
   private emitNames: string[];
+  private consts: Set<string>;
 
-  constructor(tokens: Token[], params: string[], emitNames?: string[]) {
+  constructor(tokens: Token[], params: string[], emitNames?: string[], consts?: string[]) {
     this.tokens = tokens;
     this.params = params;
     this.emitNames = emitNames ?? params;
+    this.consts = new Set(consts ?? []);
   }
 
   private peek(): Token {
@@ -324,10 +340,29 @@ class Parser {
 
       // Parameter reference. Emit the caller's canonical name (e.g. "a"/"b"), not the
       // source param name, which a minifier can rename (esm.sh turns `(a,b)=>a+b` into
-      // `(n,t)=>n+t`) — the shader templates hardcode the canonical names.
+      // `(n,t)=>n+t`) — the shader templates hardcode the canonical names. A canonical
+      // name that is itself a builtin (`map`'s positional `i`/`len`) emits as that builtin.
       const paramIndex = this.params.indexOf(tok.value);
       if (paramIndex !== -1) {
-        return { kind: "param", name: this.emitNames[paramIndex] ?? tok.value, index: paramIndex };
+        const emitName = this.emitNames[paramIndex] ?? tok.value;
+        if (BUILTINS.has(emitName)) {
+          return { kind: "builtin", name: emitName as "i" | "len" };
+        }
+        return { kind: "param", name: emitName, index: paramIndex };
+      }
+
+      // Index/length builtins referenced directly (string expressions): `i` (element
+      // index), `len` (input length).
+      if (BUILTINS.has(tok.value)) {
+        return { kind: "builtin", name: tok.value as "i" | "len" };
+      }
+
+      // Captured const array, indexed by subscript: `hann[i % N]`.
+      if (this.consts.has(tok.value)) {
+        this.expect("lbracket");
+        const index = this.parseTernary();
+        this.expect("rbracket");
+        return { kind: "index", array: tok.value, index };
       }
 
       throw new Error(
@@ -397,7 +432,8 @@ function extractArrowParams(source: string): { params: string[]; body: string } 
 
 export function parseExpression(
   fn: ((...args: number[]) => number) | string,
-  paramNames?: string[]
+  paramNames?: string[],
+  consts?: string[]
 ): IRNode {
   let body: string;
   let params: string[];
@@ -417,7 +453,7 @@ export function parseExpression(
   }
 
   const tokens = tokenize(body);
-  const parser = new Parser(tokens, params, emitNames);
+  const parser = new Parser(tokens, params, emitNames, consts);
   return parser.parse();
 }
 
