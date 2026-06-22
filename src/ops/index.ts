@@ -6,3 +6,4 @@ export { gpuHistogram } from "./histogram";
 export { gpuMatmul } from "./matmul";
 export { gpuScan } from "./scan";
 export { gpuSort } from "./sort";
+export { gpuSortByKey } from "./sort-by-key";

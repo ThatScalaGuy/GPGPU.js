@@ -488,6 +488,54 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// Like bitonicSortShader but carries a values payload: keys drive the comparison, and when a
+// pair is swapped the matching values are swapped too. keyType drives ordering; valType is
+// independent (both 4 bytes).
+export function bitonicSortByKeyShader(
+  keyType: DataType = "f32",
+  valType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+struct Params {
+  blockSize: u32,
+  subBlockSize: u32,
+  length: u32,
+}
+
+@group(0) @binding(0) var<storage, read_write> keys: array<${keyType}>;
+@group(0) @binding(1) var<storage, read_write> values: array<${valType}>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  let pairDistance = params.subBlockSize;
+  let blockSize = params.blockSize;
+
+  let leftIdx = (idx / pairDistance) * (pairDistance * 2u) + (idx % pairDistance);
+  let rightIdx = leftIdx + pairDistance;
+
+  if (rightIdx >= params.length) { return; }
+
+  let sameDirection = ((leftIdx / blockSize) % 2u) == 0u;
+
+  let leftKey = keys[leftIdx];
+  let rightKey = keys[rightIdx];
+
+  let shouldSwap = select((leftKey < rightKey), (leftKey > rightKey), sameDirection);
+
+  if (shouldSwap) {
+    keys[leftIdx] = rightKey;
+    keys[rightIdx] = leftKey;
+    let tmp = values[leftIdx];
+    values[leftIdx] = values[rightIdx];
+    values[rightIdx] = tmp;
+  }
+}
+`;
+}
+
 export function customKernelShader(
   shaderBody: string,
   inputTypes: DataType[],

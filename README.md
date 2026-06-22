@@ -113,6 +113,22 @@ Flat arrays with explicit dimensions. Uses tiled GPU algorithm with shared memor
 await gpu.sort(array)  // GPU-accelerated bitonic sort
 ```
 
+### Sort by key
+
+Sort `keys` ascending and permute `values` to follow, returning `[sortedKeys,
+sortedValues]`. `keys` and `values` must be the same length; the `values` dtype
+is independent of the `keys` dtype.
+
+```javascript
+const [keys, values] = await gpu.sortByKey([3, 1, 2], [30, 10, 20]);
+// keys   -> [1, 2, 3]
+// values -> [10, 20, 30]
+```
+
+- **Not stable.** For equal keys the relative order of their values is
+  unspecified (bitonic sort is not stable) — see
+  [docs/sort-by-key.md](./docs/sort-by-key.md).
+
 ### Prefix Sum (Scan)
 
 ```javascript
@@ -204,7 +220,8 @@ await gpu.add(g, 1, { keepOnGpu: false });          // force readback to a Typed
 ```
 
 `keepOnGpu` works on `add`/`subtract`/`multiply`/`divide`, `map`, `matmul`,
-`scan`, `sort`, `pipeline().run()`, and `createKernel().run()`. Reductions
+`scan`, `sort`, `pipeline().run()`, and `createKernel().run()` (`sortByKey`
+returns a pair of `GPUArray`s under `keepOnGpu`). Reductions
 (`sum`/`min`/`max`/`product`/`reduce`) accept a `GPUArray` input but always return
 a scalar `number`. In-place ops (`scan`, `sort`) never mutate a `GPUArray` input.
 

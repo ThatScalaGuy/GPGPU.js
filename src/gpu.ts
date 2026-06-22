@@ -21,7 +21,7 @@ import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
   cpuArgmin, cpuArgmax, cpuGather, cpuScatter, cpuHistogram,
-  cpuMatmul, cpuScan, cpuSort,
+  cpuMatmul, cpuScan, cpuSort, cpuSortByKey,
 } from "./fallback/cpu-ops";
 import {
   gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip,
@@ -33,6 +33,7 @@ import { gpuHistogram } from "./ops/histogram";
 import { gpuMatmul } from "./ops/matmul";
 import { gpuScan } from "./ops/scan";
 import { gpuSort } from "./ops/sort";
+import { gpuSortByKey } from "./ops/sort-by-key";
 import { Pipeline } from "./pipeline/pipeline";
 import { GPUArray } from "./pipeline/gpu-array";
 
@@ -398,6 +399,34 @@ export class GPU {
       () => cpuSort(input as NumericArray),
       hasGpu,
       keep
+    );
+  }
+
+  // --- Sort by key ---
+
+  sortByKey(keys: NumericArray, values: NumericArray): Promise<[TypedArray, TypedArray]>;
+  sortByKey(keys: OpInput, values: OpInput, opts: { keepOnGpu: true }): Promise<[GPUArray, GPUArray]>;
+  sortByKey(keys: OpInput, values: OpInput, opts?: OpOptions): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]>;
+  sortByKey(
+    keys: OpInput,
+    values: OpInput,
+    opts?: OpOptions
+  ): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]> {
+    // Two-output op → cannot use runArrayOp (single-output). Route manually, mirroring
+    // runArrayOp: forced-GPU when a GPUArray input or keepOnGpu; otherwise withFallback.
+    const hasGpu = isGPUArray(keys) || isGPUArray(values);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    if (hasGpu || keep) {
+      return this.timedGpu("sortByKey", () =>
+        gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values, { keepOnGpu: keep } as { keepOnGpu: true })
+      );
+    }
+    return withFallback(
+      this.deviceManager,
+      "sortByKey",
+      () => gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values),
+      () => cpuSortByKey(keys as NumericArray, values as NumericArray),
+      this.fallbackConfig()
     );
   }
 

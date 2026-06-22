@@ -289,3 +289,24 @@ export function cpuSort(input: NumericArray): TypedArray {
   result.sort((a, b) => a - b);
   return result;
 }
+
+// Sort keys ascending and permute values to match. NOT stable for equal keys (matches the
+// GPU bitonic sort, which is also unstable). values dtype is independent of keys dtype.
+export function cpuSortByKey(
+  keys: NumericArray,
+  values: NumericArray
+): [TypedArray, TypedArray] {
+  const keyDtype = inferDataType(keys);
+  const valDtype = inferDataType(values);
+  const k = toTypedArray(keys, keyDtype);
+  const v = toTypedArray(values, valDtype);
+  const order = Array.from({ length: k.length }, (_, i) => i);
+  order.sort((a, b) => k[a] - k[b]);
+  const outK = resultArray(keyDtype, k.length);
+  const outV = resultArray(valDtype, v.length);
+  for (let i = 0; i < order.length; i++) {
+    outK[i] = k[order[i]];
+    outV[i] = v[order[i]];
+  }
+  return [outK, outV];
+}
