@@ -1,5 +1,5 @@
 import type {
-  NumericArray, TypedArray, MatMulOpts, KernelConfig,
+  NumericArray, TypedArray, MatMulOpts, ScatterOpts, KernelConfig,
   FallbackInfo, FallbackMode, GPUOptions, OpStats,
 } from "./core/types";
 import { inferDataType } from "./core/types";
@@ -20,7 +20,7 @@ import { withFallback, type FallbackConfig } from "./fallback/index";
 import {
   cpuAdd, cpuSubtract, cpuMultiply, cpuDivide,
   cpuMap, cpuZip, cpuReduce, cpuSum, cpuMin, cpuMax, cpuProduct,
-  cpuArgmin, cpuArgmax, cpuGather,
+  cpuArgmin, cpuArgmax, cpuGather, cpuScatter,
   cpuMatmul, cpuScan, cpuSort,
 } from "./fallback/cpu-ops";
 import {
@@ -28,6 +28,7 @@ import {
 } from "./ops/elementwise";
 import { gpuReduce, gpuSum, gpuMin, gpuMax, gpuProduct, gpuArgmin, gpuArgmax } from "./ops/reduce";
 import { gpuGather } from "./ops/gather";
+import { gpuScatter } from "./ops/scatter";
 import { gpuMatmul } from "./ops/matmul";
 import { gpuScan } from "./ops/scan";
 import { gpuSort } from "./ops/sort";
@@ -292,6 +293,28 @@ export class GPU {
       "gather",
       (k) => gpuGather(this.deviceManager, this.bufferPool, this.shaderCache, src, idx, { keepOnGpu: k } as { keepOnGpu: true }),
       () => cpuGather(src as NumericArray, idx as NumericArray),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Scatter ---
+
+  scatter(dst: NumericArray, idx: NumericArray, vals: NumericArray, opts?: ScatterOpts): Promise<TypedArray>;
+  scatter(dst: OpInput, idx: OpInput, vals: OpInput, opts: ScatterOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  scatter(dst: OpInput, idx: OpInput, vals: OpInput, opts?: ScatterOpts & OpOptions): Promise<TypedArray | GPUArray>;
+  scatter(
+    dst: OpInput,
+    idx: OpInput,
+    vals: OpInput,
+    opts?: ScatterOpts & OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(dst) || isGPUArray(idx) || isGPUArray(vals);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "scatter",
+      (k) => gpuScatter(this.deviceManager, this.bufferPool, this.shaderCache, dst, idx, vals, { ...opts, keepOnGpu: k } as ScatterOpts & { keepOnGpu: true }),
+      () => cpuScatter(dst as NumericArray, idx as NumericArray, vals as NumericArray, opts?.mode),
       hasGpu,
       keep
     );

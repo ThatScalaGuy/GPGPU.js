@@ -194,6 +194,28 @@ export function cpuGather(src: NumericArray, idx: NumericArray): TypedArray {
   return result;
 }
 
+// out = copy of dst with vals scattered at idx. mode "set" overwrites (last write wins on
+// duplicate idx); "add" accumulates. Out-of-range idx clamps to the last element, matching
+// the GPU shader. Integer wrap on overflow matches the GPU atomics (TypedArray truncation).
+export function cpuScatter(
+  dst: NumericArray,
+  idx: NumericArray,
+  vals: NumericArray,
+  mode: "set" | "add" = "set"
+): TypedArray {
+  const dtype = inferDataType(dst);
+  const out = toTypedArray(dst, dtype).slice() as TypedArray;
+  const arrIdx = toTypedArray(idx, "u32");
+  const arrVals = toTypedArray(vals, dtype);
+  const last = out.length - 1;
+  for (let i = 0; i < arrIdx.length; i++) {
+    const t = Math.min(arrIdx[i], last);
+    if (mode === "add") out[t] += arrVals[i];
+    else out[t] = arrVals[i];
+  }
+  return out;
+}
+
 export function cpuMatmul(
   a: NumericArray,
   b: NumericArray,

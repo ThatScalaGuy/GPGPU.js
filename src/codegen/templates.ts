@@ -86,6 +86,70 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// out[idx[i]] = vals[i]; one thread per idx element. Out-of-range indices clamp to the
+// last element (the GPU can't throw). DUPLICATE indices race — last write wins,
+// nondeterministically. Documented behaviour; use mode:"add" for deterministic accumulation.
+export function scatterSetShader(
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> out: array<${elemType}>;
+@group(0) @binding(1) var<storage, read> idx_buf: array<u32>;
+@group(0) @binding(2) var<storage, read> vals: array<${elemType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&idx_buf)) { return; }
+  out[min(idx_buf[i], arrayLength(&out) - 1u)] = vals[i];
+}
+`;
+}
+
+// out[idx[i]] += vals[i], atomically (collision-safe for duplicate indices).
+// WGSL atomics cover only i32/u32 → integers use atomicAdd. f32 has no native atomic add,
+// so reinterpret the bits and CAS-loop with atomicCompareExchangeWeak (portable, core WGSL).
+export function scatterAddShader(
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  if (elemType === "f32") {
+    return `
+@group(0) @binding(0) var<storage, read_write> out: array<atomic<u32>>;
+@group(0) @binding(1) var<storage, read> idx_buf: array<u32>;
+@group(0) @binding(2) var<storage, read> vals: array<f32>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&idx_buf)) { return; }
+  let t = min(idx_buf[i], arrayLength(&out) - 1u);
+  let v = vals[i];
+  var old = atomicLoad(&out[t]);
+  loop {
+    let res = atomicCompareExchangeWeak(&out[t], old, bitcast<u32>(bitcast<f32>(old) + v));
+    if (res.exchanged) { break; }
+    old = res.old_value;
+  }
+}
+`;
+  }
+  return `
+@group(0) @binding(0) var<storage, read_write> out: array<atomic<${elemType}>>;
+@group(0) @binding(1) var<storage, read> idx_buf: array<u32>;
+@group(0) @binding(2) var<storage, read> vals: array<${elemType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&idx_buf)) { return; }
+  let t = min(idx_buf[i], arrayLength(&out) - 1u);
+  atomicAdd(&out[t], vals[i]);
+}
+`;
+}
+
 export function scalarBroadcastShader(
   op: string,
   elemType: DataType = "f32",
