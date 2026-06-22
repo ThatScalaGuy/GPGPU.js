@@ -8,6 +8,7 @@ export type {
   KernelConfig,
   MatMulOpts,
   ScatterOpts,
+  HistogramOpts,
   BufferSpec,
   Backend,
   OpStats,

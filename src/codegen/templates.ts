@@ -150,6 +150,38 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// Counts input values into `bins` equal-width buckets over [min, max], using atomic<u32>
+// accumulators (collision-safe). Out-of-range values clamp to the edge bins. Input is cast
+// to f32 for the bucket math, so i32/u32 inputs work too. Output is always u32 counts.
+export function histogramShader(
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  return `
+struct Params { bins: u32, minVal: f32, maxVal: f32 }
+
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> hist: array<atomic<u32>>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&input)) { return; }
+  let x = f32(input[i]);
+  let range = params.maxVal - params.minVal;
+  var b = 0u;
+  if (range > 0.0) {
+    let f = (x - params.minVal) / range * f32(params.bins);
+    if (f >= 0.0) {
+      b = min(u32(floor(f)), params.bins - 1u);
+    }
+  }
+  atomicAdd(&hist[b], 1u);
+}
+`;
+}
+
 export function scalarBroadcastShader(
   op: string,
   elemType: DataType = "f32",
