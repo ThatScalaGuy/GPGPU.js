@@ -378,7 +378,9 @@ per-output-element kernel design.
 
 ### Pipeline
 
-Chain operations to keep data on the GPU between steps:
+Chain operations to keep data on the GPU between steps — every stage reads the
+previous stage's buffer, so there is one upload at the start and one readback at the
+end:
 
 ```javascript
 const result = await gpu.pipeline()
@@ -387,6 +389,36 @@ const result = await gpu.pipeline()
   .reduce((a, b) => a + b, 0)
   .run(inputData);
 ```
+
+Available steps: `.map(fn)`, `.scan(fn?, identity?)` (defaults to an inclusive prefix
+sum), `.filter(predicate)`, `.sort()`, `.cast(dtype)`, `.unique()`,
+`.histogram({ bins, min, max })`, `.convolve(kernel, { mode })`, `.gather(indices)`, and
+`.reduce(fn, identity)`. `filter`/`unique`/`gather`/`convolve` produce a length that
+differs from the input; `cast` changes the element type for every subsequent step, and
+`histogram` makes the stream `bins` u32 counts. `reduce` collapses the stream to a scalar
+and must be the terminal step.
+
+```javascript
+// histogram -> scan = cumulative distribution, entirely on the GPU
+const cdf = await gpu.pipeline()
+  .histogram({ bins: 5, min: 0, max: 10 })
+  .scan()
+  .run(samples);
+```
+
+```javascript
+// keep evens, running total, then sum — all on the GPU
+const total = await gpu.pipeline()
+  .map(x => x * 2)
+  .filter(x => x > 5)
+  .scan()
+  .reduce((a, b) => a + b, 0)
+  .run([1, 2, 3, 4, 5, 6]);
+```
+
+Consecutive `.map()` steps are fused into a single kernel (no intermediate buffers or
+dispatches). `run()` honours `keepOnGpu` like any other op, returning a `GPUArray` you
+can feed into the next pipeline.
 
 ### GPU-Resident Arrays
 

@@ -26,6 +26,33 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 }
 
+// Fuse a run of consecutive map expressions into a single dispatch. Each stage reads the
+// previous value as `x` (shadowed in its own block) and folds into `acc`, so N maps become
+// one kernel with no intermediate buffers. A single-element `expressions` reproduces
+// `mapShader`. Used only by the Pipeline, whose maps never carry captured const arrays.
+export function fusedMapShader(
+  expressions: string[],
+  elemType: DataType = "f32",
+  workgroupSize = DEFAULT_WORKGROUP_SIZE
+): string {
+  const stages = expressions
+    .map((expr) => `  { let x = acc; acc = ${expr}; }`)
+    .join("\n");
+  return `
+@group(0) @binding(0) var<storage, read> input: array<${elemType}>;
+@group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
+
+@compute @workgroup_size(${workgroupSize})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&input)) { return; }
+  var acc = input[idx];
+${stages}
+  output[idx] = acc;
+}
+`;
+}
+
 export function zipShader(
   expression: string,
   elemType: DataType = "f32",
