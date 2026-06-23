@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-23
+
+A richer `pipeline`: the fluent builder now chains most of the op set while keeping
+data on the GPU between steps, and folds adjacent maps into a single kernel.
+
+### Added
+
+- **Chainable pipeline steps.** `gpu.pipeline()` now supports `scan`, `filter`,
+  `sort`, `cast`, `unique`, `histogram`, `convolve`, and `gather` alongside the
+  existing `map` and `reduce`. Each step keeps the stream GPU-resident by delegating
+  to the matching op, so a chain pays for one upload and one readback (e.g.
+  `histogram(...).scan()` produces a cumulative distribution entirely on the GPU).
+  `filter` / `unique` / `gather` / `convolve` change the stream length; `cast`
+  changes its element type and `histogram` makes it `bins` `u32` counts for every
+  following step.
+
+### Changed
+
+- **Map fusion.** Consecutive `.map()` steps now compile to a single GPU dispatch
+  with no intermediate buffers, instead of one dispatch (and one buffer) per map.
+- `reduce` is enforced as the terminal pipeline step — the builder throws if a step
+  is chained after it — and reducing an empty (e.g. fully filtered-out) stream
+  returns the identity.
+
+### Tests
+
+- Expanded the real-GPU pipeline suite with multi-step compositions
+  (`map → filter → scan → reduce`, `sort → unique`, `histogram → scan`,
+  `map → gather`), dtype-changing `cast`, map-fusion equivalence, empty-stream
+  handling, and GPU-resident round-trips.
+
 ## [0.3.0] - 2026-06-22
 
 A large batch of new operations (Tiers 1–3), a Node runtime via Google Dawn,
@@ -179,7 +210,8 @@ Int32Array | Uint32Array`; reductions still return `number`.
 - Custom WGSL kernels via `createKernel`.
 - Automatic CPU fallback when WebGPU is unavailable.
 
-[Unreleased]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.1.0...v0.1.5
