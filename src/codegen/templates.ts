@@ -685,8 +685,12 @@ fn main(
 
 export function bitonicSortShader(
   elemType: DataType = "f32",
+  descending = false,
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
+  // Ascending: blocks with sameDirection swap when left > right. Descending flips both arms.
+  const cmpSame = descending ? "<" : ">";
+  const cmpOther = descending ? ">" : "<";
   return `
 struct Params {
   blockSize: u32,
@@ -713,7 +717,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let leftVal = data[leftIdx];
   let rightVal = data[rightIdx];
 
-  let shouldSwap = select((leftVal < rightVal), (leftVal > rightVal), sameDirection);
+  let shouldSwap = select((leftVal ${cmpOther} rightVal), (leftVal ${cmpSame} rightVal), sameDirection);
 
   if (shouldSwap) {
     data[leftIdx] = rightVal;
@@ -729,8 +733,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 export function bitonicSortByKeyShader(
   keyType: DataType = "f32",
   valType: DataType = "f32",
+  descending = false,
   workgroupSize = DEFAULT_WORKGROUP_SIZE
 ): string {
+  // Ascending: blocks with sameDirection swap when left > right. Descending flips both arms.
+  const cmpSame = descending ? "<" : ">";
+  const cmpOther = descending ? ">" : "<";
   return `
 struct Params {
   blockSize: u32,
@@ -758,7 +766,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let leftKey = keys[leftIdx];
   let rightKey = keys[rightIdx];
 
-  let shouldSwap = select((leftKey < rightKey), (leftKey > rightKey), sameDirection);
+  let shouldSwap = select((leftKey ${cmpOther} rightKey), (leftKey ${cmpSame} rightKey), sameDirection);
 
   if (shouldSwap) {
     keys[leftIdx] = rightKey;

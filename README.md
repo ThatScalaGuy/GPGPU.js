@@ -164,10 +164,41 @@ await gpu.matmul(a, b, { rowsA, colsA, colsB })
 
 Flat arrays with explicit dimensions. Uses tiled GPU algorithm with shared memory.
 
+### Statistics
+
+```javascript
+await gpu.mean(array)                  // arithmetic mean
+await gpu.variance(array)              // population variance (ddof = 0, like NumPy)
+await gpu.std(array)                   // population standard deviation
+await gpu.dot(a, b)                    // dot product (lengths must match)
+await gpu.norm(array)                  // Euclidean (L2) norm
+await gpu.cosineSimilarity(a, b)       // dot(a, b) / (|a| |b|) — vector search scoring
+await gpu.softmax(array)               // exp(x - max) / sum, numerically stable, f32
+```
+
+All are compositions of the shipped primitives (sum/max/zip/map), so they accept
+`GPUArray` inputs and never mutate them. The scalar ops return a `number`;
+`softmax` is an array op and supports `keepOnGpu`. Float sums reassociate on the
+GPU — compare with a tolerance (see [docs/numerics.md](./docs/numerics.md)).
+
+### Constructors
+
+Create arrays directly on the GPU — no upload. With `keepOnGpu` the result stays
+resident, e.g. as `gather`/`scatter` indices or simulation seeds.
+
+```javascript
+await gpu.zeros(1024)                          // 1024 zeros (dtype option: "f32" | "i32" | "u32")
+await gpu.full(1024, 3.5)                      // 1024 copies of 3.5
+await gpu.arange(0, 10)                        // [0..9], NumPy semantics, step defaults to 1
+await gpu.arange(10, 0, -2, { dtype: "i32" }) // [10, 8, 6, 4, 2]
+await gpu.linspace(0, 1, 5)                    // [0, 0.25, 0.5, 0.75, 1], endpoints exact
+```
+
 ### Sort
 
 ```javascript
-await gpu.sort(array)  // GPU-accelerated bitonic sort
+await gpu.sort(array)                       // ascending bitonic sort
+await gpu.sort(array, { descending: true }) // descending
 ```
 
 ### Sort by key
@@ -185,6 +216,25 @@ const [keys, values] = await gpu.sortByKey([3, 1, 2], [30, 10, 20]);
 - **Not stable.** For equal keys the relative order of their values is
   unspecified (bitonic sort is not stable) — see
   [docs/sort-by-key.md](./docs/sort-by-key.md).
+- `{ descending: true }` sorts the keys descending (values follow).
+
+### Top-k
+
+The `k` largest (default) or smallest elements with their **original indices** —
+the last mile of vector search and leaderboards, without reading the whole
+sorted array back.
+
+```javascript
+const { values, indices } = await gpu.topK(scores, 10);
+// values:  the 10 largest scores, sorted descending
+// indices: their original positions — scores[indices[j]] === values[j]
+
+await gpu.topK(latencies, 5, { largest: false });  // 5 smallest, ascending
+```
+
+- Tie order is unspecified (the underlying sort is not stable).
+- `k` clamps to `[0, n]`; `values` keeps the input dtype, `indices` are `u32`.
+- With `keepOnGpu` both come back as `GPUArray`s.
 
 ### Prefix Sum (Scan)
 
@@ -323,6 +373,19 @@ const t = await gpu.transpose(m);            // dims inferred from the shape
 - A CPU array is uploaded to a fresh, owning `GPUArray` with the shape.
 - The element count must match the new shape, or it throws.
 
+### Slice
+
+Sub-range copy with JavaScript `Array.prototype.slice` semantics — negative
+indices count from the end, out-of-range clamps. On the GPU this is a single
+buffer copy (no compute pass), so a resident array can be paged or trimmed
+without reading everything back.
+
+```javascript
+await gpu.slice([1, 2, 3, 4, 5], 1, 3);    // [2, 3]
+await gpu.slice(data, -100);                // last 100 elements
+await gpu.slice(g, 0, 10, { keepOnGpu: true }); // first 10, still on the GPU
+```
+
 ### `gpu.unique(input, opts?)`
 
 Returns the **distinct** values of `input` in **ascending sorted order** (NumPy
@@ -394,6 +457,23 @@ no native complex type, so a complex number is carried as a `vec2<f32>`.
 await gpu.fft([1, 1, 1, 1, 1, 1, 1, 1]);
 // Float32Array(16): X[0] = (8, 0), all other bins ~ (0, 0)
 // bin k:  re = out[2*k],  im = out[2*k + 1]
+```
+
+**Complex input.** `{ complexInput: true }` treats the input as an interleaved
+complex signal of length `2n` instead of promoting reals.
+
+### `gpu.ifft(spectrum, opts?)`
+
+Inverse FFT of an interleaved complex spectrum (length `2n`), returning the
+interleaved complex time signal scaled by `1/n` — so `ifft(fft(x))` recovers `x`
+(real parts ≈ `x`, imaginary parts ≈ 0). This closes the frequency-domain loop:
+transform, filter bins, and come back.
+
+```javascript
+const spec = await gpu.fft(signal);       // real -> complex spectrum
+// ... zero out bins, apply a frequency response, etc.
+const back = await gpu.ifft(spec);        // complex -> complex time signal
+const samples = back.filter((_, i) => i % 2 === 0);  // real parts
 ```
 
 See [docs/fft.md](./docs/fft.md) for the interleaved-complex layout, the

@@ -29,37 +29,55 @@ const SORT_PAD: Record<DataType, number> = {
   u32: 4294967295,
 };
 
+// Descending mirror: the smallest value of the type so padding still sinks to the end.
+const SORT_PAD_DESC: Record<DataType, number> = {
+  f32: -Infinity,
+  i32: -2147483648,
+  u32: 0,
+};
+
+export interface SortOptions extends OpOptions {
+  /** Sort largest-first instead of smallest-first. Default false. */
+  descending?: boolean;
+}
+
 export function gpuSort(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: OpInput,
-  opts: { keepOnGpu: true }
+  opts: SortOptions & { keepOnGpu: true }
 ): Promise<GPUArray>;
 export function gpuSort(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: OpInput,
-  opts?: OpOptions
+  opts?: SortOptions
 ): Promise<TypedArray>;
 export async function gpuSort(
   deviceManager: DeviceManager,
   bufferPool: BufferPool,
   shaderCache: ShaderCache,
   input: OpInput,
-  opts?: OpOptions
+  opts?: SortOptions
 ): Promise<TypedArray | GPUArray> {
   const device = await deviceManager.getDevice();
   const dtype = inputDtype(input);
   const keepOnGpu = opts?.keepOnGpu ?? false;
+  const descending = opts?.descending ?? false;
+  const pad = descending ? SORT_PAD_DESC[dtype] : SORT_PAD[dtype];
 
   const originalSize = isGPUArray(input) ? input.length : toTypedArray(input, dtype).length;
   const paddedSize = nextPowerOf2(originalSize);
   const byteSize = paddedSize * 4;
 
-  const shader = bitonicSortShader(dtype);
-  const pipeline = await shaderCache.getOrCreate(device, shader, `bitonic-sort-${dtype}`);
+  const shader = bitonicSortShader(dtype, descending);
+  const pipeline = await shaderCache.getOrCreate(
+    device,
+    shader,
+    `bitonic-sort-${dtype}${descending ? "-desc" : ""}`
+  );
 
   // Data buffer needs read_write storage + copy (sorted in place).
   const bufData = bufferPool.acquire(
@@ -75,17 +93,17 @@ export async function gpuSort(
     copyEncoder.copyBufferToBuffer(input.buffer, 0, bufData, 0, originalSize * 4);
     device.queue.submit([copyEncoder.finish()]);
     if (paddedSize > originalSize) {
-      const pad = viewFor(dtype, new ArrayBuffer((paddedSize - originalSize) * 4));
-      pad.fill(SORT_PAD[dtype]);
-      device.queue.writeBuffer(bufData, originalSize * 4, pad.buffer as ArrayBuffer, pad.byteOffset, pad.byteLength);
+      const tail = viewFor(dtype, new ArrayBuffer((paddedSize - originalSize) * 4));
+      tail.fill(pad);
+      device.queue.writeBuffer(bufData, originalSize * 4, tail.buffer as ArrayBuffer, tail.byteOffset, tail.byteLength);
     }
   } else {
-    // Pad to next power of 2 with the type's max value, then upload in one shot.
+    // Pad to next power of 2 with the direction's sentinel, then upload in one shot.
     const arr = toTypedArray(input, dtype);
     const padded = viewFor(dtype, new ArrayBuffer(byteSize));
     padded.set(arr);
     for (let i = originalSize; i < paddedSize; i++) {
-      padded[i] = SORT_PAD[dtype];
+      padded[i] = pad;
     }
     device.queue.writeBuffer(bufData, 0, padded.buffer as ArrayBuffer, padded.byteOffset, padded.byteLength);
   }

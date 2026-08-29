@@ -354,12 +354,13 @@ export function cpuFilter(
   return out;
 }
 
-export function cpuSort(input: NumericArray): TypedArray {
+export function cpuSort(input: NumericArray, opts?: { descending?: boolean }): TypedArray {
   const dtype = inferDataType(input);
   const result = toTypedArray(input, dtype).slice();
   // Numeric ascending order (TypedArray.sort defaults to numeric, but be explicit
   // to match the GPU bitonic sort for all dtypes).
   result.sort((a, b) => a - b);
+  if (opts?.descending) result.reverse();
   return result;
 }
 
@@ -367,14 +368,15 @@ export function cpuSort(input: NumericArray): TypedArray {
 // GPU bitonic sort, which is also unstable). values dtype is independent of keys dtype.
 export function cpuSortByKey(
   keys: NumericArray,
-  values: NumericArray
+  values: NumericArray,
+  opts?: { descending?: boolean }
 ): [TypedArray, TypedArray] {
   const keyDtype = inferDataType(keys);
   const valDtype = inferDataType(values);
   const k = toTypedArray(keys, keyDtype);
   const v = toTypedArray(values, valDtype);
   const order = Array.from({ length: k.length }, (_, i) => i);
-  order.sort((a, b) => k[a] - k[b]);
+  order.sort(opts?.descending ? (a, b) => k[b] - k[a] : (a, b) => k[a] - k[b]);
   const outK = resultArray(keyDtype, k.length);
   const outV = resultArray(valDtype, v.length);
   for (let i = 0; i < order.length; i++) {
@@ -385,6 +387,13 @@ export function cpuSortByKey(
 }
 
 export { cpuUnique } from "../ops/unique";
+export {
+  cpuMean, cpuVariance, cpuStd, cpuDot, cpuNorm, cpuCosineSimilarity, cpuSoftmax,
+} from "../ops/stats";
+export { cpuZeros, cpuFull, cpuArange, cpuLinspace } from "../ops/constructors";
+export { cpuIfft } from "../ops/fft";
+export { cpuSlice } from "../ops/slice";
+export { cpuTopK } from "../ops/topk";
 export { cpuSegmentedReduce } from "../ops/segmented-reduce";
 export { cpuRandom } from "../ops/random";
 export { cpuFft } from "../ops/fft";

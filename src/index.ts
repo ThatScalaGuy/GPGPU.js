@@ -21,6 +21,11 @@ export type {
 export type { SegmentedReduceOpts, SegmentedReduceOp } from "./ops/segmented-reduce";
 export type { RandomOpts } from "./ops/random";
 export type { ConvolveOpts, ConvolveMode } from "./ops/convolve";
+export type { FftOptions } from "./ops/fft";
+export type { SortOptions } from "./ops/sort";
+export type { SortByKeyOptions } from "./ops/sort-by-key";
+export type { TopKOptions } from "./ops/topk";
+export type { ConstructorOpts } from "./ops/constructors";
 
 import { GPU } from "./gpu";
 
