@@ -95,13 +95,41 @@ await gpu.map(array, x => x * 2 + 1)
 
 // String expression (minifier-safe)
 await gpu.map(array, "x * x + 1")
+
+// Index-aware: the expression also sees the element index `i` and the length `len`
+await gpu.map(array, (x, i, len) => x * i)
+await gpu.map(array, "i / len")               // 0, 1/n, 2/n, ...
 ```
 
 **Supported in expressions:**
 - Arithmetic: `+ - * / %`
 - Comparisons: `< > <= >= == !=`
 - Ternary: `a > 0 ? a : -a`
-- Math: `Math.abs`, `Math.sqrt`, `Math.pow`, `Math.min`, `Math.max`, `Math.floor`, `Math.ceil`, `Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`
+- Math: `Math.abs`, `Math.sqrt`, `Math.pow`, `Math.min`, `Math.max`, `Math.floor`, `Math.ceil`, `Math.round`, `Math.sign`, `Math.clamp`, `Math.sin`, `Math.cos`, `Math.tan`, `Math.exp`, `Math.log`
+
+**Captured arrays (`consts`).** A map expression can read extra arrays by name —
+the escape hatch for windowing, lookup tables, and n-ary elementwise math that
+`zip` (two inputs) can't express. A `GPUArray` const binds in place (no upload);
+a plain array uploads per call:
+
+```javascript
+// Apply a window function: out[i] = x * hann[i]
+await gpu.map(samples, "x * hann[i]", { consts: { hann } });
+
+// Three-array elementwise: out[i] = x * gains[i] + offsets[i]
+await gpu.map(signal, "x * gains[i] + offsets[i]", { consts: { gains, offsets } });
+```
+
+### Zip
+
+Combine two arrays element by element with a custom function — `map` with two
+inputs. Accepts the same arrow-function or string forms as `map`, and applies
+[NumPy broadcasting](./docs/broadcasting.md) when the shapes differ:
+
+```javascript
+await gpu.zip(a, b, (a, b) => a * b + 1);
+await gpu.zip(prices, quantities, "a * b");
+```
 
 ### Reduce
 
@@ -111,6 +139,21 @@ await gpu.sum(array)                           // sum
 await gpu.min(array)                           // minimum
 await gpu.max(array)                           // maximum
 await gpu.product(array)                       // product
+await gpu.argmin(array)                        // index of the minimum
+await gpu.argmax(array)                        // index of the maximum
+```
+
+`argmin`/`argmax` return the **first** index on ties (NumPy tie-break) and `-1`
+for an empty array.
+
+### Gather
+
+Indexed reads: `out[k] = src[idx[k]]` — permutations, lookups, and reordering.
+`idx` is read as `u32`; the result length is `idx.length` and the dtype follows
+`src`. An out-of-range index clamps to the last element (the GPU can't throw).
+
+```javascript
+await gpu.gather([10, 20, 30, 40], [3, 0, 1]);  // [40, 10, 20]
 ```
 
 ### Matrix Multiply
@@ -453,11 +496,14 @@ await gpu.add([1, 2, 3], 1, { keepOnGpu: true });  // force a GPUArray from CPU 
 await gpu.add(g, 1, { keepOnGpu: false });          // force readback to a TypedArray
 ```
 
-`keepOnGpu` works on `add`/`subtract`/`multiply`/`divide`, `map`, `matmul`,
-`scan`, `sort`, `pipeline().run()`, and `createKernel().run()` (`sortByKey`
-returns a pair of `GPUArray`s under `keepOnGpu`). Reductions
-(`sum`/`min`/`max`/`product`/`reduce`) accept a `GPUArray` input but always return
-a scalar `number`. In-place ops (`scan`, `sort`) never mutate a `GPUArray` input.
+`keepOnGpu` works on every array-returning op: `add`/`subtract`/`multiply`/`divide`,
+`map`, `zip`, `gather`, `filter`, `searchsorted`, `cast`, `transpose`, `scatter`,
+`histogram`, `matmul`, `scan`, `sort`, `unique`, `segmentedReduce`, `random`,
+`fft`, `convolve`, `pipeline().run()`, and `createKernel().run()` (`sortByKey`
+returns a pair of `GPUArray`s under `keepOnGpu`; `reshape` always returns a
+`GPUArray`). Reductions (`sum`/`min`/`max`/`product`/`reduce`/`argmin`/`argmax`)
+accept a `GPUArray` input but always return a scalar `number`. In-place ops
+(`scan`, `sort`) never mutate a `GPUArray` input.
 
 > **Ownership:** a `GPUArray` you receive is yours to manage — read it with
 > `toArray()` (which keeps it alive) or release it with `destroy()`. Leaking
