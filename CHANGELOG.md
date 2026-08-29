@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-29
+
+A correctness-hardening pass plus the most-requested convenience ops. A review
+of v0.4.0 turned up several silent-corruption bugs (all with regression tests
+now), and the new ops close the NumPy-family gaps: statistics, `topK`, an
+inverse FFT, GPU-side constructors, and `slice`. There is also a benchmark
+harness with published numbers.
+
+### Added
+
+- **Statistics:** `mean`, `variance`, `std` (population, like NumPy), `dot`,
+  `norm` (L2), `cosineSimilarity`, and `softmax` (numerically stable
+  `exp(x - max)`, always `f32`). All are compositions of existing primitives —
+  they accept `GPUArray` inputs, never mutate them, and `softmax` supports
+  `keepOnGpu`.
+- **`topK(input, k, { largest })`** — the `k` largest (default) or smallest
+  elements together with their **original indices**
+  (`input[indices[j]] === values[j]`, torch.topk-like). Built from a descending
+  key–value sort against an on-GPU `arange` iota plus `slice`, so taking the top
+  10 of 100k scores no longer reads the whole sorted array back. Tie order is
+  unspecified (the underlying bitonic sort is unstable).
+- **`ifft(spectrum)`** — inverse FFT of an interleaved complex spectrum, scaled
+  by `1/n`, so `ifft(fft(x))` recovers `x`. `fft` also accepts interleaved
+  complex input via `{ complexInput: true }`. The forward path is unchanged
+  bit-for-bit.
+- **Constructors:** `zeros`, `full`, `arange` (NumPy semantics, integer dtypes
+  and negative steps included), and `linspace` (both endpoints exact). With
+  `keepOnGpu` the result is born on the GPU — e.g. `arange` as `u32` indices
+  feeding `gather` without an upload.
+- **`slice(input, begin, end)`** — sub-range copy with JS
+  `Array.prototype.slice` semantics (negative indices, clamping). On the GPU it
+  is a single buffer copy, no compute pass.
+- **`{ descending: true }`** for `sort` and `sortByKey` (flipped bitonic compare
+  with flipped pad sentinels; cached pipelines carry the direction).
+- **Benchmark harness:** `npm run bench` measures GPU vs plain JS end-to-end
+  (upload/readback included), and `bench/README.md` publishes measured numbers —
+  one-shot element-wise ops are transfer-bound (~1×), GPU-resident chains and
+  compute-heavy ops win big (resident map 177× at 4M, sort 32×, matmul ~310×).
+- README now documents previously invisible shipped features: `zip`, `gather`,
+  `argmin`/`argmax`, the index-aware `map` form `(x, i, len)`, and the `consts`
+  capture (named arrays readable inside a map expression).
+
+### Fixed
+
+- **The reduce family corrupted a resident `GPUArray` input.** `reduce` / `sum`
+  / `min` / `max` / `product` / `argmin` / `argmax` used the caller's buffer as
+  a ping-pong target from the second pass on, silently overwriting any
+  GPU-resident input longer than one workgroup (256 elements) with partial
+  results. The ping-pong partner is now a pooled scratch buffer.
+- **Per-element ops over ~4.19M elements returned garbage.** Dispatches never
+  clamped against `maxComputeWorkgroupsPerDimension` (65535), and the resulting
+  WebGPU validation error never became a JS exception, so the op returned
+  whatever was left in the recycled pool buffer. Per-element shaders now
+  dispatch a 2-D workgroup grid (tested at 4.3M elements).
+- **GPU errors now actually reach the CPU fallback.** Every GPU op runs inside
+  `pushErrorScope`/`popErrorScope`, so validation and out-of-memory failures
+  reject instead of passing silently — an oversized multi-pass op (e.g. a very
+  large `scan`) now falls back to the CPU with correct results.
+- **`pipeline().run()` had no CPU fallback** — the recommended chaining API
+  hard-threw on machines without WebGPU. It now honours the instance's fallback
+  policy with a CPU interpreter over the recorded steps; forced-GPU paths
+  (`GPUArray` input, `keepOnGpu`) still throw, like standalone ops.
+- **`GPUArray` dtype mismatches were silently reinterpreted.** Feeding an `f32`
+  array where `u32` indices are expected (`gather`, `scatter`, `searchsorted`,
+  …) read the raw bits as the wrong type; it now throws with a hint to
+  `gpu.cast()`.
+- **The Node auto-detect runtime could segfault.** Nothing rooted the lazily
+  imported Dawn `GPU` instance after init, so V8 could collect it while the
+  device was still in use — multi-MB workloads (which trigger GC) crashed the
+  process. The device manager now retains the instance for the device's
+  lifetime.
+- `Math.clamp` compiled to WGSL fine but crashed the CPU expression evaluator
+  (JS has no `Math.clamp`); string expressions now evaluate against a Math that
+  includes it.
+
+### Changed
+
+- The device is requested with the adapter's real buffer limits instead of the
+  128 MiB spec default, so multi-hundred-MB datasets can bind.
+- The publish workflow runs the real-GPU suite (Dawn + Mesa lavapipe, same as
+  CI) before `npm publish`, so a WGSL regression can't ship in a release.
+- The hosted playground follows the current release again (it was pinned to
+  0.2.0, hiding two releases of ops from the README's "Try it now" link).
+- The optional `webgpu` peer dependency range is widened to
+  `^0.4.0 || ^0.5.0 || ^0.6.0`.
+
+### Tests
+
+- 172 new real-GPU tests (442 → 614): resident-input reduce regressions,
+  beyond-the-dispatch-ceiling coverage, matmul across tile boundaries (it was
+  previously only tested at 2×2 against a tile size of 8), a dedicated sort
+  suite, per-op suites for every new op, end-to-end facade smoke tests, and a
+  plain-Node subprocess test for the auto-detect runtime.
+
 ## [0.4.0] - 2026-06-23
 
 A richer `pipeline`: the fluent builder now chains most of the op set while keeping
@@ -210,7 +304,8 @@ Int32Array | Uint32Array`; reductions still return `number`.
 - Custom WGSL kernels via `createKernel`.
 - Automatic CPU fallback when WebGPU is unavailable.
 
-[Unreleased]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ThatScalaGuy/GPGPU.js/compare/v0.1.5...v0.2.0
