@@ -27,6 +27,7 @@
     "test:watch": "vitest",
     "test:node-gpu": "vitest run --config vitest.node-gpu.config.ts",
     "test:browser": "vitest run --config vitest.browser.config.ts",
+    "bench": "npm run build && node bench/run.mjs",
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
