@@ -23,6 +23,9 @@ import {
   cpuArgmin, cpuArgmax, cpuGather, cpuSearchsorted, cpuCast, cpuTranspose, cpuScatter, cpuHistogram,
   cpuMatmul, cpuScan, cpuSort, cpuSortByKey, cpuFilter,
   cpuUnique, cpuSegmentedReduce, cpuRandom, cpuFft, cpuConvolve,
+  cpuMean, cpuVariance, cpuStd, cpuDot, cpuNorm, cpuCosineSimilarity, cpuSoftmax,
+  cpuZeros, cpuFull, cpuArange, cpuLinspace,
+  cpuIfft, cpuSlice, cpuTopK,
 } from "./fallback/cpu-ops";
 import {
   gpuElementwiseBinary, gpuScalarBroadcast, gpuMap, gpuZip,
@@ -44,9 +47,18 @@ import { gpuSegmentedReduce } from "./ops/segmented-reduce";
 import type { SegmentedReduceOpts } from "./ops/segmented-reduce";
 import { gpuRandom } from "./ops/random";
 import type { RandomOpts } from "./ops/random";
-import { gpuFft } from "./ops/fft";
+import { gpuFft, gpuIfft } from "./ops/fft";
+import type { FftOptions } from "./ops/fft";
 import { gpuConvolve } from "./ops/convolve";
 import type { ConvolveOpts } from "./ops/convolve";
+import { gpuMean, gpuVariance, gpuStd, gpuDot, gpuNorm, gpuCosineSimilarity, gpuSoftmax } from "./ops/stats";
+import { gpuZeros, gpuFull, gpuArange, gpuLinspace } from "./ops/constructors";
+import type { ConstructorOpts } from "./ops/constructors";
+import { gpuSlice } from "./ops/slice";
+import { gpuTopK } from "./ops/topk";
+import type { TopKOptions } from "./ops/topk";
+import type { SortOptions } from "./ops/sort";
+import type { SortByKeyOptions } from "./ops/sort-by-key";
 import { Pipeline } from "./pipeline/pipeline";
 import { GPUArray } from "./pipeline/gpu-array";
 
@@ -324,6 +336,84 @@ export class GPU {
     );
   }
 
+  // --- Statistics ---
+
+  /** Arithmetic mean. Empty input → NaN. */
+  mean(input: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "mean",
+      () => gpuMean(this.deviceManager, this.bufferPool, this.shaderCache, input),
+      () => cpuMean(input as NumericArray),
+      isGPUArray(input)
+    );
+  }
+
+  /** Population variance (ddof = 0, like NumPy). Empty input → NaN. */
+  variance(input: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "variance",
+      () => gpuVariance(this.deviceManager, this.bufferPool, this.shaderCache, input),
+      () => cpuVariance(input as NumericArray),
+      isGPUArray(input)
+    );
+  }
+
+  /** Population standard deviation: sqrt(variance). */
+  std(input: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "std",
+      () => gpuStd(this.deviceManager, this.bufferPool, this.shaderCache, input),
+      () => cpuStd(input as NumericArray),
+      isGPUArray(input)
+    );
+  }
+
+  /** Dot product. `a` and `b` must have the same length. */
+  dot(a: OpInput, b: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "dot",
+      () => gpuDot(this.deviceManager, this.bufferPool, this.shaderCache, a, b),
+      () => cpuDot(a as NumericArray, b as NumericArray),
+      isGPUArray(a) || isGPUArray(b)
+    );
+  }
+
+  /** Euclidean (L2) norm. */
+  norm(input: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "norm",
+      () => gpuNorm(this.deviceManager, this.bufferPool, this.shaderCache, input),
+      () => cpuNorm(input as NumericArray),
+      isGPUArray(input)
+    );
+  }
+
+  /** Cosine similarity: dot(a, b) / (‖a‖ ‖b‖). A zero-norm operand → NaN. */
+  cosineSimilarity(a: OpInput, b: OpInput): Promise<number> {
+    return this.runScalarOp(
+      "cosineSimilarity",
+      () => gpuCosineSimilarity(this.deviceManager, this.bufferPool, this.shaderCache, a, b),
+      () => cpuCosineSimilarity(a as NumericArray, b as NumericArray),
+      isGPUArray(a) || isGPUArray(b)
+    );
+  }
+
+  /** Numerically stable softmax: exp(x - max) / Σ exp(x - max). Result is always f32. */
+  softmax(input: NumericArray): Promise<TypedArray>;
+  softmax(input: OpInput, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  softmax(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  softmax(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "softmax",
+      (k) => gpuSoftmax(this.deviceManager, this.bufferPool, this.shaderCache, input, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuSoftmax(input as NumericArray),
+      hasGpu,
+      keep
+    );
+  }
+
   // --- Gather ---
 
   gather(src: NumericArray, idx: NumericArray): Promise<TypedArray>;
@@ -340,6 +430,30 @@ export class GPU {
       "gather",
       (k) => gpuGather(this.deviceManager, this.bufferPool, this.shaderCache, src, idx, { keepOnGpu: k } as { keepOnGpu: true }),
       () => cpuGather(src as NumericArray, idx as NumericArray),
+      hasGpu,
+      keep
+    );
+  }
+
+  // --- Slice ---
+
+  /** Sub-range copy with JS `Array.prototype.slice` semantics (negatives count
+   *  from the end, out-of-range clamps). A GPUArray input is never mutated. */
+  slice(input: NumericArray, begin?: number, end?: number): Promise<TypedArray>;
+  slice(input: OpInput, begin: number | undefined, end: number | undefined, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  slice(input: OpInput, begin?: number, end?: number, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  slice(
+    input: OpInput,
+    begin?: number,
+    end?: number,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "slice",
+      (k) => gpuSlice(this.deviceManager, this.bufferPool, this.shaderCache, input, begin, end, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuSlice(input as NumericArray, begin, end),
       hasGpu,
       keep
     );
@@ -511,16 +625,16 @@ export class GPU {
 
   // --- Sort ---
 
-  sort(input: NumericArray): Promise<TypedArray>;
-  sort(input: OpInput, opts: { keepOnGpu: true }): Promise<GPUArray>;
-  sort(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray>;
-  sort(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray> {
+  sort(input: NumericArray, opts?: SortOptions): Promise<TypedArray>;
+  sort(input: OpInput, opts: SortOptions & { keepOnGpu: true }): Promise<GPUArray>;
+  sort(input: OpInput, opts?: SortOptions): Promise<TypedArray | GPUArray>;
+  sort(input: OpInput, opts?: SortOptions): Promise<TypedArray | GPUArray> {
     const hasGpu = isGPUArray(input);
     const keep = opts?.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
       "sort",
-      (k) => gpuSort(this.deviceManager, this.bufferPool, this.shaderCache, input, { keepOnGpu: k } as { keepOnGpu: true }),
-      () => cpuSort(input as NumericArray),
+      (k) => gpuSort(this.deviceManager, this.bufferPool, this.shaderCache, input, { ...opts, keepOnGpu: k } as SortOptions & { keepOnGpu: true }),
+      () => cpuSort(input as NumericArray, opts),
       hasGpu,
       keep
     );
@@ -528,13 +642,13 @@ export class GPU {
 
   // --- Sort by key ---
 
-  sortByKey(keys: NumericArray, values: NumericArray): Promise<[TypedArray, TypedArray]>;
-  sortByKey(keys: OpInput, values: OpInput, opts: { keepOnGpu: true }): Promise<[GPUArray, GPUArray]>;
-  sortByKey(keys: OpInput, values: OpInput, opts?: OpOptions): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]>;
+  sortByKey(keys: NumericArray, values: NumericArray, opts?: SortByKeyOptions): Promise<[TypedArray, TypedArray]>;
+  sortByKey(keys: OpInput, values: OpInput, opts: SortByKeyOptions & { keepOnGpu: true }): Promise<[GPUArray, GPUArray]>;
+  sortByKey(keys: OpInput, values: OpInput, opts?: SortByKeyOptions): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]>;
   sortByKey(
     keys: OpInput,
     values: OpInput,
-    opts?: OpOptions
+    opts?: SortByKeyOptions
   ): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]> {
     // Two-output op → cannot use runArrayOp (single-output). Route manually, mirroring
     // runArrayOp: forced-GPU when a GPUArray input or keepOnGpu; otherwise withFallback.
@@ -542,14 +656,47 @@ export class GPU {
     const keep = opts?.keepOnGpu ?? hasGpu;
     if (hasGpu || keep) {
       return this.timedGpu("sortByKey", () =>
-        gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values, { keepOnGpu: keep } as { keepOnGpu: true })
+        gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values, { ...opts, keepOnGpu: keep } as SortByKeyOptions & { keepOnGpu: true })
       );
     }
     return withFallback(
       this.deviceManager,
       "sortByKey",
-      () => gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values),
-      () => cpuSortByKey(keys as NumericArray, values as NumericArray),
+      () => this.guarded(() => gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values, opts)),
+      () => cpuSortByKey(keys as NumericArray, values as NumericArray, opts),
+      this.fallbackConfig()
+    );
+  }
+
+  // --- Top-k selection ---
+
+  /**
+   * The `k` largest (default) or smallest elements with their original indices.
+   * `values` are sorted (descending for largest, ascending for smallest);
+   * `indices` satisfy `input[indices[j]] === values[j]`. Tie order is
+   * unspecified (the underlying bitonic sort is unstable).
+   */
+  topK(input: NumericArray, k: number, opts?: TopKOptions): Promise<{ values: TypedArray; indices: TypedArray }>;
+  topK(input: OpInput, k: number, opts: TopKOptions & { keepOnGpu: true }): Promise<{ values: GPUArray; indices: GPUArray }>;
+  topK(input: OpInput, k: number, opts?: TopKOptions): Promise<{ values: TypedArray | GPUArray; indices: TypedArray | GPUArray }>;
+  topK(
+    input: OpInput,
+    k: number,
+    opts?: TopKOptions
+  ): Promise<{ values: TypedArray | GPUArray; indices: TypedArray | GPUArray }> {
+    // Two-output op, routed like sortByKey.
+    const hasGpu = isGPUArray(input);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    if (hasGpu || keep) {
+      return this.timedGpu("topK", () =>
+        gpuTopK(this.deviceManager, this.bufferPool, this.shaderCache, input, k, { ...opts, keepOnGpu: keep } as TopKOptions & { keepOnGpu: true })
+      );
+    }
+    return withFallback(
+      this.deviceManager,
+      "topK",
+      () => this.guarded(() => gpuTopK(this.deviceManager, this.bufferPool, this.shaderCache, input, k, opts)),
+      () => cpuTopK(input as NumericArray, k, opts?.largest),
       this.fallbackConfig()
     );
   }
@@ -613,21 +760,100 @@ export class GPU {
     );
   }
 
+  // --- Constructors (no input array) ---
+
+  /** `n` zeros. `dtype` defaults to `"f32"`. */
+  zeros(n: number, opts?: ConstructorOpts): Promise<TypedArray>;
+  zeros(n: number, opts: ConstructorOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  zeros(n: number, opts?: ConstructorOpts): Promise<TypedArray | GPUArray> {
+    const keep = opts?.keepOnGpu ?? false;
+    return this.runArrayOp(
+      "zeros",
+      (k) => gpuZeros(this.deviceManager, this.bufferPool, this.shaderCache, n, { ...opts, keepOnGpu: k } as ConstructorOpts & { keepOnGpu: true }),
+      () => cpuZeros(n, opts),
+      false,
+      keep
+    );
+  }
+
+  /** `n` copies of `value`. `dtype` defaults to `"f32"`. */
+  full(n: number, value: number, opts?: ConstructorOpts): Promise<TypedArray>;
+  full(n: number, value: number, opts: ConstructorOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  full(n: number, value: number, opts?: ConstructorOpts): Promise<TypedArray | GPUArray> {
+    const keep = opts?.keepOnGpu ?? false;
+    return this.runArrayOp(
+      "full",
+      (k) => gpuFull(this.deviceManager, this.bufferPool, this.shaderCache, n, value, { ...opts, keepOnGpu: k } as ConstructorOpts & { keepOnGpu: true }),
+      () => cpuFull(n, value, opts),
+      false,
+      keep
+    );
+  }
+
+  /** `start, start + step, …` up to (excluding) `stop` — NumPy `arange`. `step`
+   *  defaults to 1 and must be nonzero; `dtype` defaults to `"f32"`. */
+  arange(start: number, stop: number, step?: number, opts?: ConstructorOpts): Promise<TypedArray>;
+  arange(start: number, stop: number, step: number, opts: ConstructorOpts & { keepOnGpu: true }): Promise<GPUArray>;
+  arange(start: number, stop: number, step = 1, opts?: ConstructorOpts): Promise<TypedArray | GPUArray> {
+    const keep = opts?.keepOnGpu ?? false;
+    return this.runArrayOp(
+      "arange",
+      (k) => gpuArange(this.deviceManager, this.bufferPool, this.shaderCache, start, stop, step, { ...opts, keepOnGpu: k } as ConstructorOpts & { keepOnGpu: true }),
+      () => cpuArange(start, stop, step, opts),
+      false,
+      keep
+    );
+  }
+
+  /** `num` evenly spaced f32 values from `start` to `stop`, endpoints inclusive. */
+  linspace(start: number, stop: number, num: number, opts?: OpOptions): Promise<TypedArray>;
+  linspace(start: number, stop: number, num: number, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  linspace(start: number, stop: number, num: number, opts?: OpOptions): Promise<TypedArray | GPUArray> {
+    const keep = opts?.keepOnGpu ?? false;
+    return this.runArrayOp(
+      "linspace",
+      (k) => gpuLinspace(this.deviceManager, this.bufferPool, this.shaderCache, start, stop, num, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuLinspace(start, stop, num),
+      false,
+      keep
+    );
+  }
+
   // --- FFT (forward, real input -> interleaved complex spectrum) ---
 
-  fft(input: NumericArray): Promise<TypedArray>;
-  fft(input: OpInput, opts: { keepOnGpu: true }): Promise<GPUArray>;
-  fft(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  fft(input: NumericArray, opts?: FftOptions): Promise<TypedArray>;
+  fft(input: OpInput, opts: FftOptions & { keepOnGpu: true }): Promise<GPUArray>;
+  fft(input: OpInput, opts?: FftOptions): Promise<TypedArray | GPUArray>;
   fft(
     input: OpInput,
-    opts?: OpOptions
+    opts?: FftOptions
   ): Promise<TypedArray | GPUArray> {
     const hasGpu = isGPUArray(input);
     const keep = opts?.keepOnGpu ?? hasGpu;
     return this.runArrayOp(
       "fft",
-      (k) => gpuFft(this.deviceManager, this.bufferPool, this.shaderCache, input, { keepOnGpu: k } as { keepOnGpu: true }),
-      () => cpuFft(input as NumericArray),
+      (k) => gpuFft(this.deviceManager, this.bufferPool, this.shaderCache, input, { ...opts, keepOnGpu: k } as FftOptions & { keepOnGpu: true }),
+      () => cpuFft(input as NumericArray, opts),
+      hasGpu,
+      keep
+    );
+  }
+
+  /** Inverse FFT of an interleaved complex spectrum (length `2n`), returning the
+   *  interleaved complex time signal scaled by `1/n`. */
+  ifft(spectrum: NumericArray): Promise<TypedArray>;
+  ifft(spectrum: OpInput, opts: { keepOnGpu: true }): Promise<GPUArray>;
+  ifft(spectrum: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray>;
+  ifft(
+    spectrum: OpInput,
+    opts?: OpOptions
+  ): Promise<TypedArray | GPUArray> {
+    const hasGpu = isGPUArray(spectrum);
+    const keep = opts?.keepOnGpu ?? hasGpu;
+    return this.runArrayOp(
+      "ifft",
+      (k) => gpuIfft(this.deviceManager, this.bufferPool, this.shaderCache, spectrum, { keepOnGpu: k } as { keepOnGpu: true }),
+      () => cpuIfft(spectrum as NumericArray),
       hasGpu,
       keep
     );

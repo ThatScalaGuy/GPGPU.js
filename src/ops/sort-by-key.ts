@@ -29,6 +29,18 @@ const SORT_PAD: Record<DataType, number> = {
   u32: 4294967295,
 };
 
+// Descending mirror: the smallest value of the type so padding still sinks to the end.
+const SORT_PAD_DESC: Record<DataType, number> = {
+  f32: -Infinity,
+  i32: -2147483648,
+  u32: 0,
+};
+
+export interface SortByKeyOptions extends OpOptions {
+  /** Sort keys largest-first instead of smallest-first. Default false. */
+  descending?: boolean;
+}
+
 // Upload one data array into `bufData` padded to `paddedSize`. Keys pad with the type-max
 // sentinel; values pad with 0 (padded values ride along with sentinel keys to the tail and
 // are trimmed). Handles a GPUArray input (copy the real region, then fill the pad tail) and a
@@ -72,7 +84,7 @@ export function gpuSortByKey(
   shaderCache: ShaderCache,
   keys: OpInput,
   values: OpInput,
-  opts: { keepOnGpu: true }
+  opts: SortByKeyOptions & { keepOnGpu: true }
 ): Promise<[GPUArray, GPUArray]>;
 export function gpuSortByKey(
   deviceManager: DeviceManager,
@@ -80,7 +92,7 @@ export function gpuSortByKey(
   shaderCache: ShaderCache,
   keys: OpInput,
   values: OpInput,
-  opts?: OpOptions
+  opts?: SortByKeyOptions
 ): Promise<[TypedArray, TypedArray]>;
 export async function gpuSortByKey(
   deviceManager: DeviceManager,
@@ -88,27 +100,33 @@ export async function gpuSortByKey(
   shaderCache: ShaderCache,
   keys: OpInput,
   values: OpInput,
-  opts?: OpOptions
+  opts?: SortByKeyOptions
 ): Promise<[TypedArray, TypedArray] | [GPUArray, GPUArray]> {
   const device = await deviceManager.getDevice();
   const keyDtype = inputDtype(keys);
   const valDtype = inputDtype(values);
   const keepOnGpu = opts?.keepOnGpu ?? false;
+  const descending = opts?.descending ?? false;
 
   const originalSize = isGPUArray(keys) ? keys.length : toTypedArray(keys, keyDtype).length;
   const paddedSize = nextPowerOf2(originalSize);
   const byteSize = paddedSize * 4;
 
-  const shader = bitonicSortByKeyShader(keyDtype, valDtype);
-  const pipeline = await shaderCache.getOrCreate(device, shader, `bitonic-sort-by-key-${keyDtype}-${valDtype}`);
+  const shader = bitonicSortByKeyShader(keyDtype, valDtype, descending);
+  const pipeline = await shaderCache.getOrCreate(
+    device,
+    shader,
+    `bitonic-sort-by-key-${keyDtype}-${valDtype}${descending ? "-desc" : ""}`
+  );
 
   // Both buffers need read_write storage + copy (sorted/permuted in place).
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
   const keysBuf = bufferPool.acquire(device, byteSize, usage);
   const valsBuf = bufferPool.acquire(device, byteSize, usage);
 
-  // Keys pad with the type-max sentinel so padding sorts to the tail; values pad with 0.
-  uploadPadded(device, keysBuf, keys, keyDtype, originalSize, paddedSize, SORT_PAD[keyDtype]);
+  // Keys pad with the direction's sentinel so padding sorts to the tail; values pad with 0.
+  const keyPad = descending ? SORT_PAD_DESC[keyDtype] : SORT_PAD[keyDtype];
+  uploadPadded(device, keysBuf, keys, keyDtype, originalSize, paddedSize, keyPad);
   uploadPadded(device, valsBuf, values, valDtype, originalSize, paddedSize, 0);
 
   const numPairs = paddedSize / 2;
