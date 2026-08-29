@@ -13,7 +13,7 @@ import {
   inputDtype,
   finalize,
 } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 
 /** Output-length convention, matching `numpy.convolve`'s `mode`. */
 export type ConvolveMode = "full" | "same" | "valid";
@@ -54,8 +54,9 @@ struct Params { n: u32, m: u32, outLen: u32, offset: u32 }
 @group(0) @binding(3) var<uniform> params: Params;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let t = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let t = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (t >= params.outLen) { return; }
   // Position in the full-mode output that this element maps to.
   let p = t + params.offset;
@@ -145,7 +146,7 @@ export async function gpuConvolve(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(outLen)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(outLen));
 
   ra.release();
   rv.release();

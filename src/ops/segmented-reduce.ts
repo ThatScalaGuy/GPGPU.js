@@ -5,7 +5,7 @@ import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
 import { GPUArray } from "../pipeline/gpu-array";
 import { type OpInput, type OpOptions, resolveInput, inputDtype, finalize } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { dispatchOnly } from "../core/command";
 
 /** The associative reduction applied per segment. */
@@ -71,8 +71,9 @@ function segmentedReduceShader(op: SegmentedReduceOp, elemType: DataType): strin
 @group(0) @binding(2) var<storage, read_write> out: array<atomic<${elemType}>>;
 
 @compute @workgroup_size(${WG})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${WG}u) + gid.x;
   if (i >= arrayLength(&values)) { return; }
   let s = min(segIds[i], arrayLength(&out) - 1u);
   atomicAdd(&out[s], values[i]);
@@ -88,8 +89,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 @group(0) @binding(2) var<storage, read_write> out: array<atomic<u32>>;
 
 @compute @workgroup_size(${WG})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${WG}u) + gid.x;
   if (i >= arrayLength(&values)) { return; }
   let s = min(segIds[i], arrayLength(&out) - 1u);
   let v = values[i];
@@ -111,8 +113,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 @group(0) @binding(2) var<storage, read_write> out: array<atomic<${elemType}>>;
 
 @compute @workgroup_size(${WG})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${WG}u) + gid.x;
   if (i >= arrayLength(&values)) { return; }
   let s = min(segIds[i], arrayLength(&out) - 1u);
   let v = values[i];
@@ -190,7 +193,7 @@ export async function gpuSegmentedReduce(
         { binding: 2, resource: { buffer: out, size: outBytes } },
       ],
     });
-    dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(n)]);
+    dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(n));
   }
 
   rvals.release();

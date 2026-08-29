@@ -6,7 +6,7 @@ import { GPUArray } from "../pipeline/gpu-array";
 import { type OpInput, type OpOptions, resolveInput, inputDtype, finalize } from "../core/io";
 import type { HistogramOpts } from "../core/types";
 import { uploadBuffer, dispatchOnly } from "../core/command";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { histogramShader } from "../codegen/templates";
 
 export function gpuHistogram(
@@ -62,7 +62,7 @@ export async function gpuHistogram(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(rin.length)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(rin.length));
 
   rin.release();
   bufferPool.release(bufParams);

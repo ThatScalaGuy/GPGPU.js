@@ -39,7 +39,15 @@ export class DeviceManager {
       throw new GPUNotAvailableError();
     }
 
-    const device = await adapter.requestDevice();
+    // The spec's default limits cap storage bindings at 128 MiB even on adapters
+    // that support far more — request the adapter's actual buffer limits so large
+    // datasets (e.g. multi-hundred-MB matrices) can bind.
+    const device = await adapter.requestDevice({
+      requiredLimits: {
+        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+        maxBufferSize: adapter.limits.maxBufferSize,
+      },
+    });
 
     device.lost.then(() => {
       this.device = null;

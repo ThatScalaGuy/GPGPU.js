@@ -17,8 +17,9 @@ export function mapShader(
 @group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
 ${constBindings}
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&input)) { return; }
   let x = input[idx];
   output[idx] = ${expression};
@@ -43,8 +44,9 @@ export function fusedMapShader(
 @group(0) @binding(1) var<storage, read_write> output: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&input)) { return; }
   var acc = input[idx];
 ${stages}
@@ -64,8 +66,9 @@ export function zipShader(
 @group(0) @binding(2) var<storage, read_write> output: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&a_in)) { return; }
   let a = a_in[idx];
   let b = b_in[idx];
@@ -85,8 +88,9 @@ export function elementwiseBinaryShader(
 @group(0) @binding(2) var<storage, read_write> output: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&a)) { return; }
   output[idx] = a[idx] ${op} b[idx];
 }
@@ -124,8 +128,9 @@ fn strideAAt(i: u32) -> u32 { return params.strideA[i / 4u][i % 4u]; }
 fn strideBAt(i: u32) -> u32 { return params.strideB[i / 4u][i % 4u]; }
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= params.total) { return; }
 
   // Unravel idx into per-dim coordinates (row-major: last dim is fastest), accumulating each
@@ -160,8 +165,9 @@ export function gatherShader(
 @group(0) @binding(2) var<storage, read_write> output: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let k = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let k = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (k >= arrayLength(&idx_buf)) { return; }
   output[k] = src[min(idx_buf[k], arrayLength(&src) - 1u)];
 }
@@ -180,8 +186,9 @@ export function predicateFlagShader(
 @group(0) @binding(1) var<storage, read_write> flags: array<u32>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&input)) { return; }
   let x = input[idx];
   flags[idx] = select(0u, 1u, (${expression}));
@@ -203,8 +210,9 @@ export function compactShader(
 @group(0) @binding(3) var<storage, read_write> output: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&input)) { return; }
   if (flags[idx] == 1u) {
     output[scanned[idx] - 1u] = input[idx];
@@ -227,8 +235,9 @@ export function searchsortedShader(
 @group(0) @binding(2) var<storage, read_write> out: array<u32>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (i >= arrayLength(&queries)) { return; }
   let q = queries[i];
   var lo = 0u;
@@ -260,8 +269,9 @@ export function scatterSetShader(
 @group(0) @binding(2) var<storage, read> vals: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (i >= arrayLength(&idx_buf)) { return; }
   out[min(idx_buf[i], arrayLength(&out) - 1u)] = vals[i];
 }
@@ -282,8 +292,9 @@ export function scatterAddShader(
 @group(0) @binding(2) var<storage, read> vals: array<f32>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (i >= arrayLength(&idx_buf)) { return; }
   let t = min(idx_buf[i], arrayLength(&out) - 1u);
   let v = vals[i];
@@ -302,8 +313,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 @group(0) @binding(2) var<storage, read> vals: array<${elemType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (i >= arrayLength(&idx_buf)) { return; }
   let t = min(idx_buf[i], arrayLength(&out) - 1u);
   atomicAdd(&out[t], vals[i]);
@@ -326,8 +338,9 @@ struct Params { bins: u32, minVal: f32, maxVal: f32 }
 @group(0) @binding(2) var<uniform> params: Params;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (i >= arrayLength(&input)) { return; }
   let x = f32(input[i]);
   let range = params.maxVal - params.minVal;
@@ -356,8 +369,9 @@ struct Params { scalar: ${elemType} }
 @group(0) @binding(2) var<uniform> params: Params;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&input)) { return; }
   output[idx] = input[idx] ${op} params.scalar;
 }
@@ -622,8 +636,9 @@ export function castShader(
 @group(0) @binding(1) var<storage, read_write> output: array<${toType}>;
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let idx = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (idx >= arrayLength(&input)) { return; }
   output[idx] = ${toType}(input[idx]);
 }

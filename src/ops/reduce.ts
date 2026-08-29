@@ -58,6 +58,14 @@ export async function gpuReduce(
 
   const firstOutCount = Math.ceil(initialSize / REDUCE_WORKGROUP_SIZE);
   const bufB = bufferPool.acquire(device, firstOutCount * 4, usage);
+  // From the second pass on, bufB's ping-pong partner must never be the caller's
+  // GPUArray buffer — writing partials there would corrupt the resident data. A CPU
+  // input's upload buffer is ours to recycle; a GPUArray input gets a scratch buffer
+  // sized for the second pass's output.
+  const scratch = ownsA
+    ? null
+    : bufferPool.acquire(device, Math.ceil(firstOutCount / REDUCE_WORKGROUP_SIZE) * 4, usage);
+  const pong = ownsA ? bufA : scratch!;
 
   const encoder = device.createCommandEncoder();
 
@@ -83,10 +91,11 @@ export async function gpuReduce(
     pass.end();
 
     size = workgroupCount;
-    [src, dst] = [dst, src];
+    src = dst;
+    dst = dst === bufB ? pong : bufB;
   }
 
-  // After the final swap, `src` holds the single reduced value.
+  // After the final pass, `src` holds the single reduced value.
   const staging = bufferPool.acquire(
     device, 4, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
   );
@@ -99,6 +108,7 @@ export async function gpuReduce(
 
   bufferPool.release(staging);
   bufferPool.release(bufB);
+  if (scratch) bufferPool.release(scratch);
   if (ownsA) bufferPool.release(bufA);
 
   return result;
@@ -213,6 +223,12 @@ async function gpuArgReduce(
 
   const firstOutCount = Math.ceil(initialSize / REDUCE_WORKGROUP_SIZE);
   const valB = bufferPool.acquire(device, firstOutCount * 4, usage);
+  // Like gpuReduce: valB's ping-pong partner from the second pass on must never be
+  // the caller's GPUArray buffer (partials would corrupt the resident data).
+  const valScratch = ownsValA
+    ? null
+    : bufferPool.acquire(device, Math.ceil(firstOutCount / REDUCE_WORKGROUP_SIZE) * 4, usage);
+  const valPong = ownsValA ? valA : valScratch!;
   // Index buffers mirror the value buffers' shapes. idxA is only the carried-index source
   // from the second pass on; on the first pass it is bound but ignored (firstPass uniform).
   const idxA = bufferPool.acquire(device, initialSize * 4, usage);
@@ -253,7 +269,8 @@ async function gpuArgReduce(
     pass.end();
 
     size = workgroupCount;
-    [srcVal, dstVal] = [dstVal, srcVal];
+    srcVal = dstVal;
+    dstVal = dstVal === valB ? valPong : valB;
     [srcIdx, dstIdx] = [dstIdx, srcIdx];
     firstPass = false;
   }
@@ -271,6 +288,7 @@ async function gpuArgReduce(
 
   bufferPool.release(staging);
   bufferPool.release(valB);
+  if (valScratch) bufferPool.release(valScratch);
   bufferPool.release(idxA);
   bufferPool.release(idxB);
   bufferPool.release(uFirst);

@@ -6,7 +6,7 @@ import { inferDataType } from "./core/types";
 import { DeviceManager } from "./core/device";
 import { BufferPool } from "./core/buffer-pool";
 import { ShaderCache } from "./core/shader-cache";
-import { uploadBuffer } from "./core/command";
+import { uploadBuffer, withErrorScope } from "./core/command";
 import { toTypedArray } from "./utils/data-conversion";
 import {
   type OpInput,
@@ -77,12 +77,19 @@ export class GPU {
     return { mode: this.fallback, onFallback: this.onFallback, onStats: this.onStats };
   }
 
+  // Run a GPU op inside error scopes so WebGPU validation/OOM failures reject
+  // instead of silently returning pooled-buffer garbage (see withErrorScope).
+  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+    const device = await this.deviceManager.getDevice();
+    return withErrorScope(device, fn);
+  }
+
   // Time a forced-GPU op (GPUArray input, keepOnGpu, or custom kernel) and report
   // its stats. These paths have no CPU alternative, so the fallback policy and
   // onFallback hook do not apply — a GPU failure simply throws.
   private async timedGpu<T>(op: string, fn: () => Promise<T>): Promise<T> {
     const t = performance.now();
-    const r = await fn();
+    const r = await this.guarded(fn);
     this.onStats?.({ op, backend: "gpu", ms: performance.now() - t });
     return r;
   }
@@ -112,7 +119,9 @@ export class GPU {
     if (hasGpuInput || keepOnGpu) {
       return this.timedGpu(op, () => gpuFn(keepOnGpu));
     }
-    return withFallback(this.deviceManager, op, () => gpuFn(false), cpuFn, this.fallbackConfig());
+    return withFallback(
+      this.deviceManager, op, () => this.guarded(() => gpuFn(false)), cpuFn, this.fallbackConfig()
+    );
   }
 
   // A GPUArray input forces the GPU path for a scalar-returning op (reduce family).
@@ -123,7 +132,9 @@ export class GPU {
     hasGpuInput: boolean
   ): Promise<number> {
     if (hasGpuInput) return this.timedGpu(op, gpuFn);
-    return withFallback(this.deviceManager, op, gpuFn, cpuFn, this.fallbackConfig());
+    return withFallback(
+      this.deviceManager, op, () => this.guarded(gpuFn), cpuFn, this.fallbackConfig()
+    );
   }
 
   // --- Elementwise operations ---
@@ -646,7 +657,7 @@ export class GPU {
   // --- Pipeline builder ---
 
   pipeline(): Pipeline {
-    return new Pipeline(this.deviceManager, this.bufferPool, this.shaderCache, this.onStats);
+    return new Pipeline(this.deviceManager, this.bufferPool, this.shaderCache, () => this.fallbackConfig());
   }
 
   // --- Custom kernel ---

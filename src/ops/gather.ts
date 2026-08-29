@@ -11,7 +11,7 @@ import {
   inputDtype,
   finalize,
 } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { gatherShader } from "../codegen/templates";
 
 export function gpuGather(
@@ -39,8 +39,8 @@ export async function gpuGather(
   opts?: OpOptions
 ): Promise<TypedArray | GPUArray> {
   const device = await deviceManager.getDevice();
-  // Output mirrors src's dtype; idx is coerced to u32 (resolveInput's dtype param uploads
-  // a plain array as u32 and validates a GPUArray index already lives in u32).
+  // Output mirrors src's dtype; idx is coerced to u32 (resolveInput uploads a plain
+  // array as u32 and rejects a GPUArray whose dtype isn't u32).
   const dtype = inputDtype(src);
 
   const rsrc = resolveInput(src, device, bufferPool, dtype);
@@ -62,7 +62,7 @@ export async function gpuGather(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(size));
 
   rsrc.release();
   ridx.release();

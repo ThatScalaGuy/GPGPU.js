@@ -51,6 +51,13 @@ export function resolveInput(
 ): ResolvedInput {
   if (input instanceof GPUArray) {
     if (input.isDestroyed) throw new Error("GPUArray has been destroyed");
+    // A GPUArray's buffer is bound as-is, so a dtype mismatch would silently
+    // reinterpret the raw bits as the wrong WGSL element type.
+    if (input.dtype !== dtype) {
+      throw new Error(
+        `GPUArray dtype mismatch: expected ${dtype}, got ${input.dtype}. Use gpu.cast() to convert.`
+      );
+    }
     return { buffer: input.buffer, length: input.length, isGpu: true, release() {} };
   }
   const arr = toTypedArray(input, dtype);

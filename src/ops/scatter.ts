@@ -6,7 +6,7 @@ import { GPUArray } from "../pipeline/gpu-array";
 import { type OpInput, resolveInput, inputDtype, finalize } from "../core/io";
 import type { ScatterOpts } from "../core/types";
 import type { OpOptions } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { dispatchOnly } from "../core/command";
 import { scatterSetShader, scatterAddShader } from "../codegen/templates";
 
@@ -73,7 +73,7 @@ export async function gpuScatter(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(m)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(m));
 
   rdst.release();
   ridx.release();

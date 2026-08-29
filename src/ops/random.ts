@@ -6,7 +6,7 @@ import { ShaderCache } from "../core/shader-cache";
 import { createOutputBuffer, uploadBuffer, dispatchOnly } from "../core/command";
 import { GPUArray } from "../pipeline/gpu-array";
 import { finalize } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 
 /**
  * Options for {@link gpuRandom}. `random` is a generator (no input array): it
@@ -73,8 +73,9 @@ fn fmix32(x: u32) -> u32 {
 }
 
 @compute @workgroup_size(${workgroupSize})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
+fn main(@builtin(global_invocation_id) gid: vec3u,
+        @builtin(num_workgroups) nwg: vec3u) {
+  let i = gid.y * (nwg.x * ${workgroupSize}u) + gid.x;
   if (i >= params.n) { return; }
   let s = params.seed;
   var k = i ^ ${GOLDEN}u;
@@ -182,7 +183,7 @@ export async function gpuRandom(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(n)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(n));
 
   bufferPool.release(bufParams);
 

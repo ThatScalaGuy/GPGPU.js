@@ -11,7 +11,7 @@ import {
   inputDtype,
   finalize,
 } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { castShader } from "../codegen/templates";
 
 export function gpuCast(
@@ -58,7 +58,7 @@ export async function gpuCast(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(length)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(length));
 
   rin.release();
 
