@@ -662,7 +662,7 @@ export class GPU {
     return withFallback(
       this.deviceManager,
       "sortByKey",
-      () => gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values, opts),
+      () => this.guarded(() => gpuSortByKey(this.deviceManager, this.bufferPool, this.shaderCache, keys, values, opts)),
       () => cpuSortByKey(keys as NumericArray, values as NumericArray, opts),
       this.fallbackConfig()
     );
@@ -695,7 +695,7 @@ export class GPU {
     return withFallback(
       this.deviceManager,
       "topK",
-      () => gpuTopK(this.deviceManager, this.bufferPool, this.shaderCache, input, k, opts),
+      () => this.guarded(() => gpuTopK(this.deviceManager, this.bufferPool, this.shaderCache, input, k, opts)),
       () => cpuTopK(input as NumericArray, k, opts?.largest),
       this.fallbackConfig()
     );
