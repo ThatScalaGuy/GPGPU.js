@@ -14,7 +14,7 @@ import {
   isGPUArray,
   finalize,
 } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { parseExpression } from "../codegen/expression-parser";
 import { emitWGSL } from "../codegen/wgsl-emitter";
 import {
@@ -84,7 +84,7 @@ async function dispatchBroadcast(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(total)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(total));
   bufferPool.release(bufParams);
 
   return { buffer: outBuf, length: total, outShape };
@@ -161,7 +161,7 @@ export async function gpuElementwiseBinary(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(size));
 
   ra.release();
   rb.release();
@@ -244,7 +244,7 @@ export async function gpuZip(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(size));
 
   ra.release();
   rb.release();
@@ -304,7 +304,7 @@ export async function gpuScalarBroadcast(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(size));
 
   rin.release();
   bufferPool.release(bufUniform);
@@ -372,7 +372,7 @@ export async function gpuMap(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(size));
 
   rin.release();
   for (const c of resolvedConsts) c.resolved.release();

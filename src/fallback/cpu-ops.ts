@@ -9,6 +9,21 @@ function resultArray(dtype: DataType, len: number): TypedArray {
   return new Float32Array(len);
 }
 
+// The GPU expression language supports `Math.clamp` (WGSL `clamp`), which plain JS
+// doesn't have — evaluate string expressions against a Math that includes it so the
+// CPU fallback accepts everything the shader compiler does.
+const MATH_WITH_CLAMP = Object.freeze(
+  Object.assign(Object.create(Math), {
+    clamp: (x: number, lo: number, hi: number) => Math.min(Math.max(x, lo), hi),
+  })
+);
+
+/** Compile a string expression into a callable with `params` in scope. */
+function compileExpr(params: string[], body: string): (...args: unknown[]) => number {
+  const fn = new Function("Math", ...params, `return ${body}`);
+  return (...args: unknown[]) => fn(MATH_WITH_CLAMP, ...args) as number;
+}
+
 // Elementwise binary over two flat CPU arrays with 1-D NumPy broadcasting: equal lengths pair
 // up; otherwise one side must be length 1 and is broadcast against the other. The result takes
 // the longer length and operand `a`'s dtype (matching the GPU path). The GPU path handles
@@ -78,7 +93,7 @@ export function cpuMap(
   const constValues = constNames.map((name) => consts![name]);
   const mapFn =
     typeof fn === "string"
-      ? (new Function("x", "i", "len", ...constNames, `return ${fn}`) as (
+      ? (compileExpr(["x", "i", "len", ...constNames], fn) as (
           x: number,
           i: number,
           len: number,
@@ -98,7 +113,7 @@ export function cpuZip(
 ): TypedArray {
   const zipFn =
     typeof fn === "string"
-      ? (new Function("a", "b", `return ${fn}`) as (a: number, b: number) => number)
+      ? (compileExpr(["a", "b"], fn) as (a: number, b: number) => number)
       : fn;
   // Same 1-D broadcasting as the elementwise ops: equal lengths pair up; otherwise one side
   // must be length 1 and is broadcast.
@@ -113,7 +128,7 @@ export function cpuReduce(
   const arr = toTypedArray(input, inferDataType(input));
   const reduceFn =
     typeof fn === "string"
-      ? (new Function("a", "b", `return ${fn}`) as (a: number, b: number) => number)
+      ? (compileExpr(["a", "b"], fn) as (a: number, b: number) => number)
       : fn;
   let acc = identity;
   for (let i = 0; i < arr.length; i++) {
@@ -307,7 +322,7 @@ export function cpuScan(
   const arr = toTypedArray(input, dtype);
   const scanFn =
     typeof fn === "string"
-      ? (new Function("a", "b", `return ${fn}`) as (a: number, b: number) => number)
+      ? (compileExpr(["a", "b"], fn) as (a: number, b: number) => number)
       : fn;
   const result = resultArray(dtype, arr.length);
   let acc = identity;
@@ -328,7 +343,7 @@ export function cpuFilter(
   const arr = toTypedArray(input, dtype);
   const pred =
     typeof predicate === "string"
-      ? (new Function("x", "i", "len", `return ${predicate}`) as (x: number, i: number, len: number) => unknown)
+      ? (compileExpr(["x", "i", "len"], predicate) as (x: number, i: number, len: number) => unknown)
       : predicate;
   const kept: number[] = [];
   for (let i = 0; i < arr.length; i++) {

@@ -11,6 +11,42 @@ export function viewFor(
   return new Float32Array(buffer);
 }
 
+/**
+ * Run a GPU op inside WebGPU error scopes. Validation and out-of-memory errors
+ * don't throw JS exceptions on their own — without a scope the op would return
+ * whatever bytes were left in its (pooled) output buffer while the error goes to
+ * the console at best. Capturing them turns a failed dispatch into a rejected
+ * promise, so the CPU-fallback machinery can actually fire.
+ *
+ * Scopes are a per-device stack: this is correct for sequentially awaited ops
+ * (the normal pattern); ops raced with `Promise.all` may attribute an error to
+ * the wrong op, which still surfaces the failure and stays safe.
+ */
+export async function withErrorScope<T>(
+  device: GPUDevice,
+  fn: () => Promise<T>
+): Promise<T> {
+  device.pushErrorScope("out-of-memory");
+  device.pushErrorScope("validation");
+  let popped = false;
+  try {
+    const result = await fn();
+    popped = true;
+    const validation = await device.popErrorScope();
+    const oom = await device.popErrorScope();
+    if (validation) throw new Error(`WebGPU validation error: ${validation.message}`);
+    if (oom) throw new Error(`WebGPU out-of-memory error: ${oom.message}`);
+    return result;
+  } catch (e) {
+    if (!popped) {
+      // fn threw before the scopes were popped — rebalance the stack.
+      await device.popErrorScope().catch(() => {});
+      await device.popErrorScope().catch(() => {});
+    }
+    throw e;
+  }
+}
+
 export function dispatchOnly(
   device: GPUDevice,
   pipeline: GPUComputePipeline,

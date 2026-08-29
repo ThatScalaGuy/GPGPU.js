@@ -11,7 +11,7 @@ import {
   inputDtype,
   finalize,
 } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { parseExpression } from "../codegen/expression-parser";
 import { emitWGSL } from "../codegen/wgsl-emitter";
 import { gpuScan } from "./scan";
@@ -77,7 +77,7 @@ export async function gpuFilter(
       { binding: 1, resource: { buffer: flagsBuf, size: n * 4 } },
     ],
   });
-  dispatchOnly(device, flagPipe, flagGroup, [computeWorkgroupCount(n)]);
+  dispatchOnly(device, flagPipe, flagGroup, computeWorkgroupGrid(n));
   const flagsArr = new GPUArray(flagsBuf, n, "u32", device, bufferPool);
 
   // 2. inclusive scan of flags (gpuScan COPIES its input, so flagsArr survives for the compact pass).
@@ -113,7 +113,7 @@ export async function gpuFilter(
         { binding: 3, resource: { buffer: outBuf, size: count * 4 } },
       ],
     });
-    dispatchOnly(device, compactPipe, compactGroup, [computeWorkgroupCount(n)]);
+    dispatchOnly(device, compactPipe, compactGroup, computeWorkgroupGrid(n));
   }
 
   rin.release();

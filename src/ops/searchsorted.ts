@@ -10,7 +10,7 @@ import {
   inputDtype,
   finalize,
 } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { searchsortedShader } from "../codegen/templates";
 
 export function gpuSearchsorted(
@@ -61,7 +61,7 @@ export async function gpuSearchsorted(
     ],
   });
 
-  dispatchOnly(device, pipeline, bindGroup, [computeWorkgroupCount(size)]);
+  dispatchOnly(device, pipeline, bindGroup, computeWorkgroupGrid(size));
 
   rsorted.release();
   rqueries.release();

@@ -1,12 +1,26 @@
-import type { DataType, HistogramOpts, OpStats, TypedArray } from "../core/types";
+import type { DataType, HistogramOpts, NumericArray, OpStats, TypedArray } from "../core/types";
+import { inferDataType } from "../core/types";
 import { toTypedArray } from "../utils/data-conversion";
+import type { FallbackConfig } from "../fallback/index";
+import {
+  cpuCast,
+  cpuConvolve,
+  cpuFilter,
+  cpuGather,
+  cpuHistogram,
+  cpuMap,
+  cpuReduce,
+  cpuScan,
+  cpuSort,
+  cpuUnique,
+} from "../fallback/cpu-ops";
 import { DeviceManager } from "../core/device";
 import { BufferPool } from "../core/buffer-pool";
 import { ShaderCache } from "../core/shader-cache";
-import { uploadBuffer, createOutputBuffer, viewFor } from "../core/command";
+import { uploadBuffer, createOutputBuffer, viewFor, withErrorScope } from "../core/command";
 import { GPUArray } from "./gpu-array";
 import { type OpInput, type OpOptions, inputDtype, isGPUArray, finalize } from "../core/io";
-import { computeWorkgroupCount } from "../utils/workgroup";
+import { computeWorkgroupGrid } from "../utils/workgroup";
 import { parseExpression } from "../codegen/expression-parser";
 import { emitWGSL, formatLiteral } from "../codegen/wgsl-emitter";
 import { fusedMapShader, reduceShader } from "../codegen/templates";
@@ -104,18 +118,20 @@ export class Pipeline {
   private deviceManager: DeviceManager;
   private bufferPool: BufferPool;
   private shaderCache: ShaderCache;
-  private onStats?: (stats: OpStats) => void;
+  // Read at run() time (not captured at construction) so mutations of the owning
+  // GPU instance's `fallback`/`onStats`/`onFallback` fields are honoured.
+  private getFallbackConfig?: () => FallbackConfig;
 
   constructor(
     deviceManager: DeviceManager,
     bufferPool: BufferPool,
     shaderCache: ShaderCache,
-    onStats?: (stats: OpStats) => void
+    getFallbackConfig?: () => FallbackConfig
   ) {
     this.deviceManager = deviceManager;
     this.bufferPool = bufferPool;
     this.shaderCache = shaderCache;
-    this.onStats = onStats;
+    this.getFallbackConfig = getFallbackConfig;
   }
 
   // A reduce collapses the stream to a scalar, so no step may follow it.
@@ -185,6 +201,83 @@ export class Pipeline {
   }
 
   async run(input: OpInput, opts?: OpOptions): Promise<TypedArray | GPUArray | number> {
+    const cfg: FallbackConfig = this.getFallbackConfig?.() ?? { mode: "warn" };
+    // Forced-GPU paths never fall back (same rule as standalone ops): a GPUArray
+    // input or a requested GPUArray result must live on a device, and a GPUArray
+    // captured operand can't be read by the CPU interpreter.
+    const forcedGpu =
+      isGPUArray(input) ||
+      opts?.keepOnGpu === true ||
+      this.steps.some(
+        (s) =>
+          (s.type === "convolve" && isGPUArray(s.kernel)) ||
+          (s.type === "gather" && isGPUArray(s.indices))
+      );
+
+    if (forcedGpu || this.deviceManager.isAvailable()) {
+      try {
+        const device = await this.deviceManager.getDevice();
+        return await withErrorScope(device, () => this.runGpu(input, opts, cfg.onStats));
+      } catch (e) {
+        if (forcedGpu) throw e;
+        cfg.onFallback?.({ op: "pipeline", error: e });
+        if (cfg.mode === "throw") throw e;
+        if (cfg.mode === "warn")
+          console.warn(`GPU execution failed for "pipeline", falling back to CPU:`, e);
+      }
+    }
+
+    const t = performance.now();
+    const r = this.runCpu(input as NumericArray);
+    cfg.onStats?.({ op: "pipeline", backend: "cpu", ms: performance.now() - t });
+    return r;
+  }
+
+  // CPU interpreter over the recorded steps — the same cpu* implementations the
+  // standalone ops fall back to, so GPU and CPU pipelines agree step by step.
+  private runCpu(input: NumericArray): TypedArray | number {
+    let current: NumericArray = input;
+    for (const step of this.steps) {
+      switch (step.type) {
+        case "map":
+          current = cpuMap(current, step.fn);
+          break;
+        case "reduce":
+          return cpuReduce(current, step.fn, step.identity);
+        case "scan":
+          current = cpuScan(current, step.fn ?? ((a, b) => a + b), step.identity ?? 0);
+          break;
+        case "filter":
+          current = cpuFilter(current, step.predicate);
+          break;
+        case "sort":
+          current = cpuSort(current);
+          break;
+        case "cast":
+          current = cpuCast(current, step.toDtype);
+          break;
+        case "unique":
+          current = cpuUnique(current);
+          break;
+        case "histogram":
+          current = cpuHistogram(current, step.bins, step.min, step.max);
+          break;
+        case "convolve":
+          current = cpuConvolve(current, step.kernel as NumericArray, step.mode);
+          break;
+        case "gather":
+          current = cpuGather(current, step.indices as NumericArray);
+          break;
+      }
+    }
+    return toTypedArray(current, inferDataType(current));
+  }
+
+  private async runGpu(
+    input: OpInput,
+    opts: OpOptions | undefined,
+    onStats: ((stats: OpStats) => void) | undefined
+  ): Promise<TypedArray | GPUArray | number> {
     const t0 = performance.now();
     const device = await this.deviceManager.getDevice();
     let dtype = inputDtype(input);
@@ -262,12 +355,12 @@ export class Pipeline {
           ],
         });
 
-        const workgroupCount = computeWorkgroupCount(currentSize);
+        const [wgX, wgY] = computeWorkgroupGrid(currentSize);
         const encoder = device.createCommandEncoder();
         const pass = encoder.beginComputePass();
         pass.setPipeline(pipeline);
         pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(workgroupCount);
+        pass.dispatchWorkgroups(wgX, wgY);
         pass.end();
         device.queue.submit([encoder.finish()]);
 
@@ -359,7 +452,7 @@ export class Pipeline {
       // the reduction of nothing is the identity.
       if (currentSize === 0) {
         for (const buf of buffersToRelease) this.bufferPool.release(buf);
-        this.onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
+        onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
         return reduceIdentity;
       }
       const staging = this.bufferPool.acquire(
@@ -374,7 +467,7 @@ export class Pipeline {
       staging.unmap();
       this.bufferPool.release(staging);
       for (const buf of buffersToRelease) this.bufferPool.release(buf);
-      this.onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
+      onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
       return result;
     }
 
@@ -387,7 +480,7 @@ export class Pipeline {
       new GPUArray(currentBuffer, currentSize, dtype, device, this.bufferPool),
       keepOnGpu
     );
-    this.onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
+    onStats?.({ op: "pipeline", backend: "gpu", ms: performance.now() - t0 });
     return out;
   }
 }

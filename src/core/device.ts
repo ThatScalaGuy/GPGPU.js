@@ -23,6 +23,12 @@ function isNode(): boolean {
 export class DeviceManager {
   private device: GPUDevice | null = null;
   private initPromise: Promise<GPUDevice> | null = null;
+  // Roots the GPU object the device came from. On Node the lazily imported Dawn
+  // GPU instance is otherwise unreferenced after init, and if V8 collects it
+  // while the device is still in use the native side crashes (SIGSEGV) — seen
+  // reliably on multi-MB allocations, which trigger GC. Browsers root
+  // navigator.gpu themselves; holding it here is harmless there.
+  private gpuRoot: GPU | null = null;
 
   async getDevice(): Promise<GPUDevice> {
     if (this.device) return this.device;
@@ -33,13 +39,22 @@ export class DeviceManager {
 
   private async init(): Promise<GPUDevice> {
     const gpu = await this.resolveGpu();
+    this.gpuRoot = gpu;
 
     const adapter = await gpu.requestAdapter();
     if (!adapter) {
       throw new GPUNotAvailableError();
     }
 
-    const device = await adapter.requestDevice();
+    // The spec's default limits cap storage bindings at 128 MiB even on adapters
+    // that support far more — request the adapter's actual buffer limits so large
+    // datasets (e.g. multi-hundred-MB matrices) can bind.
+    const device = await adapter.requestDevice({
+      requiredLimits: {
+        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+        maxBufferSize: adapter.limits.maxBufferSize,
+      },
+    });
 
     device.lost.then(() => {
       this.device = null;
@@ -87,5 +102,6 @@ export class DeviceManager {
   reset(): void {
     this.device = null;
     this.initPromise = null;
+    this.gpuRoot = null;
   }
 }
