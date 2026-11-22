@@ -22,11 +22,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Single deploy job since we're just deploying
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  # Upload runs in its own job: deploy-pages can miss an artifact uploaded in the same job (actions/deploy-pages#451).
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,6 +35,14 @@ jobs:
         with:
           # Upload entire repository
           path: 'playground/'
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
